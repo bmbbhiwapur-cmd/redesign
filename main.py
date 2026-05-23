@@ -51,9 +51,10 @@ def generate_labeled_2d_image(smiles_str, highlight_dict=None, legend_text="Loca
             
             kwargs = {}
             if highlight_dict:
-                # Format mappings for RDKit color configurations
-                kwargs['highlightAtoms'] = list(highlight_dict.keys())
-                kwargs['highlightAtomColors'] = highlight_dict
+                valid_highlights = {int(k): v for k, v in highlight_dict.items() if int(k) < mol_to_draw.GetNumAtoms()}
+                if valid_highlights:
+                    kwargs['highlightAtoms'] = list(valid_highlights.keys())
+                    kwargs['highlightAtomColors'] = valid_highlights
             
             img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)), legend=legend_text, **kwargs)
             buffered = io.BytesIO()
@@ -65,7 +66,7 @@ def generate_labeled_2d_image(smiles_str, highlight_dict=None, legend_text="Loca
     return None
 
 def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
-    """Programmatically attaches functional groups by running substitution matrices on available hydrogen slots."""
+    """Programmatically attaches functional groups via a bulletproof Reaction SMARTS substitute matrix."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol:
         return []
@@ -74,17 +75,23 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     if target_atom_idx >= num_atoms:
         target_atom_idx = 0
         
+    target_atom = parent_mol.GetAtomWithIdx(int(target_atom_idx))
+    
+    # Valency Block Gate: If an atom has zero hydrogens available, crash cleanly to fire the UI warning
+    if (target_atom.GetTotalNumHs() == 0):
+        return []
+
     fragments = [
-        {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions."},
-        {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis."},
-        {"name": "Amination (-NH2)", "smiles": "N", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration followed by selective reduction with Pd/C."},
-        {"name": "Fluorination (-F)", "smiles": "F", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor."},
-        {"name": "Trifluoromethylation (-CF3)", "smiles": "C(F)(F)F", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using Ruppert-Prakash reagent."},
-        {"name": "Cyanation (-C≡N)", "smiles": "C#N", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation using CuCN in refluxing DMF."},
-        {"name": "Methoxylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether synthesis using Dimethyl Sulfate."},
-        {"name": "Acetylation (-COCH3)", "smiles": "C(=O)C", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation with Acetic Anhydride and Lewis Acid."},
-        {"name": "Carboxylation (-COOH)", "smiles": "C(=O)O", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Carboxylation using high-pressure CO2 or carboxymethylation."},
-        {"name": "Chlorination (-Cl)", "smiles": "Cl", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic chlorination utilizing NCS."}
+        {"name": "Methylation (-CH3)", "smiles": "[CH3:2]", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions."},
+        {"name": "Hydroxylation (-OH)", "smiles": "[OH:2]", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis."},
+        {"name": "Amination (-NH2)", "smiles": "[NH2:2]", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration followed by selective reduction with Pd/C."},
+        {"name": "Fluorination (-F)", "smiles": "[F:2]", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor."},
+        {"name": "Trifluoromethylation (-CF3)", "smiles": "C(F)(F)[F:2]", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using Ruppert-Prakash reagent."},
+        {"name": "Cyanation (-C≡N)", "smiles": "N#[C:2]", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation using CuCN in refluxing DMF."},
+        {"name": "Methoxylation (-OCH3)", "smiles": "CO[O:2]", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether synthesis using Dimethyl Sulfate."},
+        {"name": "Acetylation (-COCH3)", "smiles": "CC(=O)[C:2]", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation with Acetic Anhydride and Lewis Acid."},
+        {"name": "Carboxylation (-COOH)", "smiles": "O=C(O)[C:2]", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Carboxylation using high-pressure CO2 or carboxymethylation."},
+        {"name": "Chlorination (-Cl)", "smiles": "[Cl:2]", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic chlorination utilizing NCS."}
     ]
     
     derived_library = []
@@ -92,29 +99,16 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     
     for frag in fragments:
         try:
-            # Explicitly remove an implicit hydrogen at the target index to prevent structural valency constraints
-            rw_mol = Chem.RWMol(parent_mol)
-            target_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
+            # Build an explicit single substitution reaction framework mapped to our exact core index
+            rxn_smarts = f"([*:1]-[H]).{frag['smiles']}>>[*:1]-[*:2]"
+            rxn = AllChem.ReactionFromSmarts(rxn_smarts)
             
-            implicit_h = target_atom.GetNumImplicitHs()
-            explicit_h = target_atom.GetNumExplicitHs()
-            
-            if implicit_h > 0:
-                target_atom.SetNumImplicitHs(implicit_h - 1)
-            elif explicit_h > 0:
-                # Clear structural bonds if explicit hydrogen arrays exist
-                for bond in target_atom.GetBonds():
-                    if bond.GetOtherAtom(target_atom).GetSymbol() == 'H':
-                        rw_mol.RemoveBond(target_atom.GetIdx(), bond.GetOtherAtom(target_atom).GetIdx())
-                        break
-            
-            frag_mol = Chem.MolFromSmiles(frag["smiles"])
-            combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
-            ed_combo = Chem.EditableMol(combo)
-            new_atom_idx = num_atoms 
-            ed_combo.AddBond(int(target_atom_idx), new_atom_idx, order=Chem.BondType.SINGLE)
-            
-            derived_mol = ed_combo.GetMol()
+            # Map inputs inside the structural forward pass container execution
+            products = rxn.RunReactants((parent_mol, Chem.MolFromSmiles(frag["smiles"])))
+            if not products or len(products) == 0:
+                continue
+                
+            derived_mol = products[0][0]
             Chem.SanitizeMol(derived_mol)
             derived_smiles = Chem.MolToSmiles(derived_mol)
             
@@ -122,16 +116,20 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             if not test_mol:
                 continue
                 
-            # Gated check: If the mirror image layout fails to draw, drop it from the array track completely
-            test_img = generate_labeled_2d_image(derived_smiles, highlight_dict={num_atoms: (0.4, 0.9, 0.4)})
+            # Verify the 2D mirror image generation works smoothly before adding it to the table array
+            test_img = generate_labeled_2d_image(derived_smiles, highlight_dict={int(target_atom_idx): (0.4, 0.9, 0.4)})
             if not test_img:
                 continue
-            
+                
             mw = round(Descriptors.MolWt(test_mol), 2)
             logp = round(Descriptors.MolLogP(test_mol), 2)
             simulated_score = round(0.95 - (rank_counter * 0.02) - (abs(logp) * 0.01), 2)
-            added_indices = list(range(num_atoms, test_mol.GetNumAtoms()))
             
+            # Identify the absolute coordinates tracking of the added modification cluster cleanly
+            added_indices = [a.GetIdx() for a in test_mol.GetAtoms() if a.GetIdx() >= num_atoms]
+            if not added_indices:
+                added_indices = [int(target_atom_idx)]
+                
             derived_library.append({
                 "Variant ID": f"Derivative-{rank_counter:02d} (Rank {rank_counter})",
                 "Fragment Added": frag["name"],
@@ -252,7 +250,7 @@ with col_params:
                 except Exception as e:
                     st.error(f"Error reading molecule: {e}")
 
-    # --- 2D VISUAL MAPPING INTERFACE GATED BY LIGAND AND PROTEIN INPUT READY METRICS ---
+    # --- 2D VISUAL MAPPING INTERFACE ---
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
         st.header("3. Clickable 2D Structural Map")
@@ -262,24 +260,21 @@ with col_params:
         st.session_state.zoom_enabled = zoom_toggle
         current_zoom_width = 750 if zoom_toggle else 450
         
-        # Build colored map dictionary based on chemical efficiency definitions
         color_map = {}
         try:
             p_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
             if p_mol:
                 for atom in p_mol.GetAtoms():
                     idx = atom.GetIdx()
-                    # Assign Green to high-efficiency spots (heteroatoms/ring links) and yellow to terminal ends
-                    if atom.GetSymbol() in ["O", "N"] or atom.GetIsAromatic():
-                        color_map[idx] = (0.4, 0.8, 0.4) # Soft Green
+                    if atom.GetTotalNumHs() > 0:
+                        color_map[idx] = (0.4, 0.8, 0.4) # Green for substitutable high efficiency atoms
                     else:
-                        color_map[idx] = (0.9, 0.9, 0.4) # Soft Yellow
+                        color_map[idx] = (0.9, 0.9, 0.4) # Yellow for fully saturated quaternary centers
         except Exception:
             pass
             
-        # Overwrite selected atom to bright red if error flag is tripped
         if st.session_state.valency_error and st.session_state.error_atom_idx is not None:
-            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) # Solid Red
+            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) # Hard Red Dot highlight
             
         base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, highlight_dict=color_map, zoom_level=current_zoom_width)
         if base_img:
@@ -296,7 +291,7 @@ with col_params:
         except Exception:
             atom_vector = 0
 
-        # RENAME FIELD: Reworked list generator trigger button to Start Positive Array
+        # RENAME MECHANICS Site: Triggers strict dynamic substitution reaction algorithm tracking
         if st.button("🚀 Start Positive Array", type="primary"):
             st.session_state.valency_error = False
             with st.spinner("Processing optimization transformations..."):
@@ -306,7 +301,6 @@ with col_params:
                     st.session_state.valency_error = False
                     st.rerun()
                 else:
-                    # Flash red dot indicator configuration coordinates
                     st.session_state.valency_error = True
                     st.session_state.error_atom_idx = atom_vector
                     st.session_state.rd_library = None
@@ -332,8 +326,6 @@ with col_visuals:
             
             # --- 2D TOPOGRAPHY HIGHLIGHT MIRROR ---
             st.markdown("##### 📍 Labeled 2D Structural Modification Mirror")
-            
-            # Formats clean integer array indexes for highlighting newly appended fragments safely
             hl_atoms = [int(x) for x in selected_row["Highlight Atoms"]]
             
             highlighted_img_html = generate_labeled_2d_image(
@@ -385,12 +377,3 @@ with col_visuals:
             simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
             
             chart_df = pd.DataFrame({
-                "Wavenumber (cm⁻¹)": wavenumbers,
-                "Transmittance (%)": np.clip(simulated_ftir_profile, 5.0, 100.0)
-            }).set_index("Wavenumber (cm⁻¹)")
-            
-            st.line_chart(chart_df, height=220)
-            st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
-            
-    else:
-        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
