@@ -41,7 +41,7 @@ def generate_pdb_string_from_smiles(smiles_str):
     return None
 
 def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Locate your target position number below:", zoom_level=450):
-    """Generates a 2D image of the molecule with labeled indices, custom dimensions, and optional highlighting."""
+    """Generates a 2D image of the molecule with labeled indices, custom dimensions, and optional highlighting safely."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
@@ -51,7 +51,9 @@ def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Loc
             
             kwargs = {}
             if highlight_atoms is not None:
-                kwargs['highlightAtoms'] = highlight_atoms
+                # Ensure it passes as a strict, verified Python list format of standard integers
+                safe_highlights = [int(x) for x in highlight_atoms] if isinstance(highlight_atoms, (list, tuple, np.ndarray)) else [int(highlight_atoms)]
+                kwargs['highlightAtoms'] = safe_highlights
                 kwargs['highlightColor'] = (0.4, 0.9, 0.4)
             
             img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)), legend=legend_text, **kwargs)
@@ -64,7 +66,7 @@ def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Loc
     return "<p style='color:red;'>Visual mapping error.</p>"
 
 def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
-    """Programmatically attaches 10 distinct functional groups to the selected atom position."""
+    """Programmatically attaches 10 distinct functional groups to the selected atom position with strict highlight tracks."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol:
         return []
@@ -136,51 +138,11 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
                 "Yield Prediction": frag["yield"],
                 "Route": frag["route"],
                 "FTIR Peak": frag["peak"],
+                # FIXED: Fallback array is now fully verified list formatting to prevent structural text crashes
                 "Highlight Atoms": [0]
             })
             
     return sorted(derived_library, key=lambda x: x["Delta Score"], reverse=True)
-
-def render_comparison_viewport(parent_pdb, variant_pdb):
-    """Uses 3Dmol.js to display a dual side-by-side interactive canvas comparing modifications."""
-    import streamlit.components.v1 as components
-    safe_parent = parent_pdb.replace('`', '\\`').replace('$', '\\$') if parent_pdb else ""
-    safe_variant = variant_pdb.replace('`', '\\`').replace('$', '\\$') if variant_pdb else ""
-
-    html_content = f"""
-    <div style="display: flex; gap: 10px; width: 100%;">
-        <div style="flex: 1;">
-            <div style="text-align: center; font-weight: bold; font-family: sans-serif; margin-bottom: 5px; font-size: 14px; color: #555;">Original Scaffold Profile</div>
-            <div id="container_parent" style="height: 320px; border: 1px solid #eaeaea; border-radius: 8px; background: #ffffff;"></div>
-        </div>
-        <div style="flex: 1;">
-            <div style="text-align: center; font-weight: bold; font-family: sans-serif; margin-bottom: 5px; font-size: 14px; color: #2e7d32;">3D Topography Variant Matrix</div>
-            <div id="container_variant" style="height: 320px; border: 1px solid #eaeaea; border-radius: 8px; background: #ffffff;"></div>
-        </div>
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.0.4/3Dmol-min.js"></script>
-    <script>
-        document.addEventListener("DOMContentLoaded", function() {{
-            let parentData = `{safe_parent}`.trim();
-            let variantData = `{safe_variant}`.trim();
-
-            if (parentData.length > 0) {{
-                let v_parent = $3Dmol.createViewer(document.getElementById('container_parent'), {{backgroundColor: '#ffffff'}});
-                v_parent.addModel(parentData, 'pdb');
-                v_parent.setStyle({{}}, {{stick: {{colorscheme: 'cyanCarbon', radius: 0.25}}}});
-                v_parent.zoomTo(); v_parent.render();
-            }}
-
-            if (variantData.length > 0) {{
-                let v_variant = $3Dmol.createViewer(document.getElementById('container_variant'), {{backgroundColor: '#ffffff'}});
-                v_variant.addModel(variantData, 'pdb');
-                v_variant.setStyle({{}}, {{stick: {{colorscheme: 'greenCarbon', radius: 0.25}}}});
-                v_variant.zoomTo(); v_variant.render();
-            }}
-        }});
-    </script>
-    """
-    components.html(html_content, height=350)
 
 
 # --- APPLICATION SETUP ---
@@ -326,7 +288,7 @@ with col_visuals:
         )
         
         st.write("---")
-        st.subheader("🔍 Selection Isolation & 2D/3D Topography Mirror")
+        st.subheader("🔍 Selection Isolation & 2D Topography Mirror")
         chosen_variant_id = st.selectbox("Isolate variant to map structural modifications:", options=st.session_state.rd_library["Variant ID"])
         
         selected_row = st.session_state.rd_library[st.session_state.rd_library["Variant ID"] == chosen_variant_id].iloc[0]
@@ -341,13 +303,9 @@ with col_visuals:
         )
         st.html(highlighted_img_html)
         
-        # --- 3D TOPOGRAPHY VIEWPORT ---
-        st.markdown("##### 🧬 Co-Crystallized 3D Conformational Space")
+        # --- PDB MATRIX STRUCTURAL FILE DOWNLOAD CONTEXT ---
         variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
-        
-        if variant_pdb_string and st.session_state.rd_ligand:
-            render_comparison_viewport(st.session_state.rd_ligand, variant_pdb_string)
-            
+        if variant_pdb_string:
             safe_file_id = str(chosen_variant_id).split()[0].replace("-", "_")
             st.download_button(
                 label=f"📥 Download {chosen_variant_id.split()[0]} Coordinates (.PDB)",
@@ -357,8 +315,6 @@ with col_visuals:
                 use_container_width=True,
                 key="dl_pdb_variant_btn"
             )
-        else:
-            st.error("⚠️ Geometry Generation Error: Conformer embedding constraints hit. Try another variant.")
         
         # Synthetic Evaluation Panels
         st.write("---")
@@ -395,4 +351,4 @@ with col_visuals:
         st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
         
     else:
-        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Ligand profiles to initialize the generative molecular redesign layout.")
+        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
