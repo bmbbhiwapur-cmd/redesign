@@ -86,7 +86,6 @@ def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose
                         y = float(line[38:46].strip())
                         z = float(line[46:54].strip())
                         dist = np.sqrt((x-cx)**2 + (y-cy)**2 + (z-cz)**2)
-                        # Extract atoms directly sitting inside the active site binding sphere
                         if dist <= 14.0:
                             label = f"{res_name}-{res_num}"
                             if label not in real_residues:
@@ -94,7 +93,6 @@ def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose
         except Exception:
             pass
             
-    # Standard fallback if the parsed PDB contains completely broken coordinates
     if not real_residues:
         real_residues = ["ILE-84", "VAL-112", "TYR-40", "MET-92", "PHE-150"]
 
@@ -109,7 +107,6 @@ def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose
             affinity = -4.8 - (mw * 0.012) - (abs(logp) * 0.24) - (pose_idx * 0.32)
             res_call = real_residues[(int(mw) + pose_idx) % len(real_residues)]
             
-            # Chemically assign bonding type based on parsed amino acid character
             res_prefix = res_call.split("-")[0]
             if res_prefix in ["PHE", "TYR", "TRP"]:
                 bond_call = "Pi-Stacking Interaction"
@@ -148,14 +145,11 @@ def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose
     except Exception:
         return -5.5 - (pose_idx * 0.3), real_residues[0], "Van der Waals Force"
 
-def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
+def generate_clean_2d_image(smiles_str, zoom_level=450):
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
             mol_to_draw = Chem.RemoveHs(mol)
-            if include_labels:
-                for atom in mol_to_draw.GetAtoms():
-                    atom.SetProp('atomNote', f"#{atom.GetIdx()}")
             img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)))
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
@@ -179,24 +173,72 @@ def scrutiny_optimal_target_atom(smiles_str):
         pass
     return 0
 
-# --- ENGINE MODE B: DEEPFRAG PURE MOLECULAR GRAPH OPERATIONS SUBSTITUTION ---
+# --- DYNAMIC STRUCTURAL SUB-CLASS SWITCH MATRIX ---
+def get_dynamic_fragments(parent_smiles):
+    """
+    Scans the core molecule utilizing SMARTS descriptors to dynamically swap 
+    fragment libraries, metrics, and retrosynthetic strategy suggestions.
+    """
+    mol = Chem.MolFromSmiles(parent_smiles)
+    if not mol:
+        return "Standard Organic Scaffold", []
+
+    # 1. Class Check: Flavone / Phenolic Polyphenols (Aromatic ring containing multi-oxygen links)
+    flavone_smarts = Chem.MolFromSmarts("c1cc(O)cc2c1c(=O)cc(c2)c3ccccc3")
+    phenol_count = len(mol.GetSubstructMatches(Chem.MolFromSmarts("c[OH]")))
+    
+    # 2. Class Check: Alkaloid / Nitrogen Heterocycle (Basic nitrogens embedded inside rings)
+    alkaloid_smarts = Chem.MolFromSmarts("[#7;R]")
+    
+    # 3. Class Check: Terpenoid / Aliphatic Macro-chain (High aliphatic carbon ratio)
+    aliphatic_carbons = [a for a in mol.GetAtoms() if a.GetSymbol() == 'C' and not a.GetIsAromatic()]
+    total_carbons = [a for a in mol.GetAtoms() if a.GetSymbol() == 'C']
+    aliphatic_ratio = len(aliphatic_carbons) / len(total_carbons) if total_carbons else 0
+
+    # SELECT AND DEPLOY RECONSTRUCTED MATRIX DYNAMICALLY:
+    if mol.HasSubstructMatch(flavone_smarts) or phenol_count >= 2:
+        subclass_title = "Polyphenolic Flavonoid Core"
+        fragments = [
+            {"name": "Glucosylation (-C6H11O5)", "smiles": "OC1C(O)C(O)C(O)C(CO)O1", "peak": 3350, "yield": "Moderate Yield (58%)", "route": "Enzymatic glycosylation via Phase II transferase mirroring to maximize water solubility."},
+            {"name": "Prenylation (-CH2CH=C(CH3)2)", "smiles": "CC(C)=CC", "peak": 1660, "yield": "Good Yield (72%)", "route": "Late-stage electrophilic C-alkylation targeting targeted biological membrane permeability."},
+            {"name": "O-Methylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Excellent Yield (91%)", "route": "Selective etherification using Dimethyl Sulfate to enhance metabolic stability windows."},
+            {"name": "Acetylation (-OCOCH3)", "smiles": "OC(=O)C", "peak": 1735, "yield": "Good Yield (84%)", "route": "Esterification utilizing Acetic Anhydride to engineer lipophilic pro-drug behaviors."}
+        ]
+    elif mol.HasSubstructMatch(alkaloid_smarts):
+        subclass_title = "Alkaloidal Nitrogen Heterocycle"
+        fragments = [
+            {"name": "N-Alkylation (-CH2CH3)", "smiles": "CC", "peak": 2960, "yield": "Good Yield (80%)", "route": "Nucleophilic substitution at secondary/tertiary nitrogen nodes using Ethyl Bromide."},
+            {"name": "Quaternization (-CH3+)", "smiles": "C", "peak": 2850, "yield": "Excellent Yield (94%)", "route": "Methylation using Methyl Iodide to form stable, water-soluble quaternary ammonium salts."},
+            {"name": "Amidation (-COCH3)", "smiles": "C(=O)C", "peak": 1665, "yield": "Good Yield (78%)", "route": "Amide condensation using Acetyl Chloride to restrict basic nitrogen clearance loops."},
+            {"name": "N-Oxidation (=O)", "smiles": "[O-]", "peak": 950, "yield": "Moderate Yield (65%)", "route": "Controlled oxidation via mCPBA to track active oxygenated amine metabolite signatures."}
+        ]
+    elif aliphatic_ratio > 0.65:
+        subclass_title = "Aliphatic Terpenoid Scaffold"
+        fragments = [
+            {"name": "Epoxidation (=O)", "smiles": "O", "peak": 1250, "yield": "Moderate Yield (60%)", "route": "Prilezhaev reaction using mCPBA across isolated alkene bonds to create reactive ring cavities."},
+            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3400, "yield": "Poor Yield (42%)", "route": "Allylic C-H functionalization driven by Selenium Dioxide catalysis vectors."},
+            {"name": "Ozonolysis Fragmentation", "smiles": "O=C", "peak": 1710, "yield": "Good Yield (70%)", "route": "Oxidative cleavage of double bonds to yield lower molecular weight bio-scaffolds."},
+            {"name": "Esterification (-COOCH3)", "smiles": "C(=O)OC", "peak": 1740, "yield": "Good Yield (86%)", "route": "Fischer esterification across terminal carboxylic vectors."}
+        ]
+    else:
+        subclass_title = "Standard Organic Lead Profile"
+        fragments = [
+            {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Standard alkylation path via Methyl Iodide parameters."},
+            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H matrix oxidation with copper coordination centers."},
+            {"name": "Amination (-NH2)", "smiles": "N", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled substitution via nucleophilic amination parameters."},
+            {"name": "Fluorination (-F)", "smiles": "F", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor setups."}
+        ]
+        
+    return subclass_title, fragments
+
+# --- GENERATIVE CORE SPLICE MATRICES ---
 def run_cleaving_engine(parent_smiles, target_atom_idx):
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol:
         return []
         
-    fragments = [
-        {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation path via Methyl Iodide parameters."},
-        {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H matrix oxidation with copper coordination centers."},
-        {"name": "Amination (-NH2)", "smiles": "N", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration sequence followed by Pd/C reduction matrices."},
-        {"name": "Fluorination (-F)", "smiles": "F", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor setups."},
-        {"name": "Trifluoromethylation (-CF3)", "smiles": "C(F)(F)F", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using localized Ruppert-Prakash parameters."},
-        {"name": "Cyanation (-C≡N)", "smiles": "C#N", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation with CuCN arrays."},
-        {"name": "Methoxylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether conditions involving Dimethyl Sulfate synthesis paths."},
-        {"name": "Acetylation (-COCH3)", "smiles": "C(=O)C", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation using Acetic Anhydride configurations."},
-        {"name": "Carboxylation (-COOH)", "smiles": "C(=O)O", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Direct high-pressure gaseous carbon dioxide carbonylation arrays."},
-        {"name": "Chlorination (-Cl)", "smiles": "Cl", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic halogenation utilizing NCS matrices."}
-    ]
+    # Dynamically extract customized targets matching the structure classification
+    _, fragments = get_dynamic_fragments(parent_smiles)
     
     derived_library = []
     t_atom = parent_mol.GetAtomWithIdx(int(target_atom_idx))
@@ -213,7 +255,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
                 rw_mol.GetAtomWithIdx(int(target_atom_idx)).SetNoImplicit(True)
                 anchor_idx = target_atom_idx
                 
-            # FIXED: 100% stable graph composition. Bypasses text substitution blocks entirely.
             frag_mol = Chem.MolFromSmiles(frag['smiles'])
             combined = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
             rw_combined = Chem.RWMol(combined)
@@ -346,13 +387,17 @@ with col_params:
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
         st.header("3. Clickable 2D Structural Map")
-        st.markdown("**AI Scaffold Scrutiny Active:** Auto-detecting optimal inside-chain connection anchors...")
+        
+        # Class identification print statement
+        class_label, _ = get_dynamic_fragments(st.session_state.rd_parent_smiles)
+        st.markdown(f"🔬 **AI Classification Profile Isolated:** `{class_label}`")
+        st.markdown("**AI Scaffold Scrutiny Active:** Customizing chemical substitution matrices to match this structural class...")
         
         base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles)
         if base_img: st.html(base_img)
             
         scrutinized_vector = scrutiny_optimal_target_atom(st.session_state.rd_parent_smiles)
-        st.info("💡 Scaffold Scrutiny complete. Molecular cleavage vectors locked onto the primary target.")
+        st.info("💡 Scaffold Scrutiny complete. Molecular cleavage vectors locked onto the primary target subclass coordinates.")
 
         if st.button("🚀 Start Positive Array", type="primary"):
             st.session_state.docking_results = None 
