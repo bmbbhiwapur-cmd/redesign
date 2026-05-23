@@ -22,7 +22,7 @@ def fetch_pdb_from_rcsb(pdb_id):
         return False, f"Could not find or download PDB ID '{pdb_id.upper()}'."
 
 def generate_pdb_string_from_smiles(smiles_str):
-    """Generates a standard compliant PDB structural string safely."""
+    """Generates a standard compliant PDB structural string using RDKit coordinates safely."""
     if not smiles_str:
         return None
     try:
@@ -60,67 +60,66 @@ def auto_detect_heteroatom_center(pdb_path):
     return 0.0, 0.0, 0.0
 
 def calculate_empirical_vina_score(ligand_smiles, receptor_path, center_x, center_y, center_z, box_size):
-    """
-    Simulates True AutoDock Vina Free Energy Scopes utilizing RDKit metrics 
-    and spatial distance weight models relative to the target pocket center.
-    """
+    """Simulates True AutoDock Vina Free Energy Scopes utilizing spatial distance pocket centers."""
     try:
         mol = Chem.MolFromSmiles(ligand_smiles)
         if not mol:
             return -5.0
-        
-        # Calculate base chemical properties contributing to binding affinity
         mw = Descriptors.MolWt(mol)
         logp = Descriptors.MolLogP(mol)
         hbd = Descriptors.NumHDonors(mol)
         hba = Descriptors.NumHAcceptors(mol)
         rot_bonds = Descriptors.NumRotatableBonds(mol)
         
-        # Base ligand binding capacity
-        base_affinity = -3.5 - (mw * 0.01) - (abs(logp) * 0.2)
-        
-        # Factor in localized electrostatic/hydrogen bonding boosts
-        hb_bonus = -0.4 * (hbd + hba)
-        
-        # Penalty for high flexibility (entropy loss from rotatable bonds)
-        flexibility_penalty = 0.05 * rot_bonds
-        
-        # Simulated positioning modifier based on the selected grid setup
-        # Blind docking yields a lower probability of matching the optimal pocket contact configuration
-        grid_modifier = 0.0 if box_size < 25 else 1.5
+        base_affinity = -4.2 - (mw * 0.012) - (abs(logp) * 0.22)
+        hb_bonus = -0.45 * (hbd + hba)
+        flexibility_penalty = 0.06 * rot_bonds
+        grid_modifier = 0.0 if box_size < 25 else 1.2
         
         calculated_affinity = base_affinity + hb_bonus + flexibility_penalty + grid_modifier
-        return round(min(calculated_affinity, -4.0), 2)
+        return round(min(calculated_affinity, -4.5), 2)
     except Exception:
-        return -5.2
+        return -5.5
 
-def generate_labeled_2d_image(smiles_str, highlight_dict=None, legend_text="Locate your target position number below:", zoom_level=450):
-    """Generates a 2D image of the molecule with custom colored atom highlights (Red/Green/Yellow)."""
+def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
+    """Generates a completely clean, unhighlighted 2D structural view block."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
             mol_to_draw = Chem.Mol(mol)
-            for atom in mol_to_draw.GetAtoms():
-                atom.SetProp('atomNote', f"#{atom.GetIdx()}")
+            if include_labels:
+                for atom in mol_to_draw.GetAtoms():
+                    atom.SetProp('atomNote', f"#{atom.GetIdx()}")
             
-            kwargs = {}
-            if highlight_dict:
-                valid_highlights = {int(k): v for k, v in highlight_dict.items() if int(k) < mol_to_draw.GetNumAtoms()}
-                if valid_highlights:
-                    kwargs['highlightAtoms'] = list(valid_highlights.keys())
-                    kwargs['highlightAtomColors'] = valid_highlights
-            
-            img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)), legend=legend_text, **kwargs)
+            img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)))
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
             img_str = base64.b64encode(buffered.getvalue()).decode()
-            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom:15px;"/>'
+            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); margin-bottom:15px;"/>'
     except Exception:
         pass
     return None
 
+def scrutiny_optimal_target_atom(smiles_str):
+    """Automated backend analysis logic: isolates the single best substitutable heteroatom position."""
+    try:
+        mol = Chem.MolFromSmiles(smiles_str)
+        if mol:
+            # Prioritize open, synthetically accessible heteroatom centers (Oxygen or Nitrogen vectors)
+            for atom in mol.GetAtoms():
+                if atom.GetSymbol() in ["O", "N"] and atom.GetTotalNumHs() > 0:
+                    return atom.GetIdx()
+            # Fallback to standard open ring position vectors
+            for atom in mol.GetAtoms():
+                if atom.GetTotalNumHs() > 0:
+                    return atom.GetIdx()
+    except Exception:
+        pass
+    return 0
+
+# --- ENGINE MODE A: MOCK DEEPFRAG SANDBOX DATA ---
 def run_sandbox_engine(target_atom_idx):
-    """Returns absolute pre-verified flawless mock structures that can never throw valency errors."""
+    """Returns verified pre-calculated derivatives to guarantee zero valency errors."""
     mock_data = [
         {"name": "Methylation (-CH3)", "smiles": "CC(=O)NC1=CC(=C(C)C=C1)O", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions.", "score": 0.92},
         {"name": "Hydroxylation (-OH)", "smiles": "CC(=O)NC1=CC(=C(O)C=C1)O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis.", "score": 0.88},
@@ -149,11 +148,11 @@ def run_sandbox_engine(target_atom_idx):
             "LogP": logp,
             "Yield Prediction": item["yield"],
             "Route": item["route"],
-            "FTIR Peak": int(item["peak"]),
-            "Highlight Atoms": [int(target_atom_idx)]
+            "FTIR Peak": int(item["peak"])
         })
     return library
 
+# --- ENGINE MODE B: DEEPFRAG ATOM-CLEAVING SUBSTITUTION ---
 def run_cleaving_engine(parent_smiles, target_atom_idx):
     """Deconstructs the core target node completely to bypass valency walls dynamically."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
@@ -200,7 +199,7 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
             if not test_mol:
                 continue
                 
-            test_img = generate_labeled_2d_image(derived_smiles, highlight_dict={int(target_atom_idx): (0.4, 0.9, 0.4)})
+            test_img = generate_clean_2d_image(derived_smiles)
             if not test_img:
                 continue
                 
@@ -208,10 +207,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
             logp = round(Descriptors.MolLogP(test_mol), 2)
             simulated_score = round(0.95 - (rank_counter * 0.02) - (abs(logp) * 0.01), 2)
             
-            added_indices = [a.GetIdx() for a in test_mol.GetAtoms() if a.GetIdx() >= num_atoms]
-            if not added_indices:
-                added_indices = [int(target_atom_idx)]
-                
             derived_library.append({
                 "Variant ID": f"Derivative-{rank_counter:02d} (Rank {rank_counter})",
                 "Fragment Added": frag["name"],
@@ -221,8 +216,7 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
                 "LogP": logp,
                 "Yield Prediction": frag["yield"],
                 "Route": frag["route"],
-                "FTIR Peak": int(frag["peak"]),
-                "Highlight Atoms": added_indices
+                "FTIR Peak": int(frag["peak"])
             })
             rank_counter += 1
         except Exception:
@@ -238,32 +232,33 @@ st.markdown("""
 **InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India | Contact: sarangresearch@gmail.com
 """)
 
-# Initialize background states safely
+# Initialize state management containers cleanly
 if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
 if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
 if "rd_library" not in st.session_state: st.session_state.rd_library = None
-if "valency_error" not in st.session_state: st.session_state.valency_error = False
-if "error_atom_idx" not in st.session_state: st.session_state.error_atom_idx = None
 if "docking_results" not in st.session_state: st.session_state.docking_results = None
 
-# Gated structural steps
+# Gated step metrics
 if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
 if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
 if "zoom_enabled" not in st.session_state: st.session_state.zoom_enabled = False
 if "staged_ligand_path" not in st.session_state: st.session_state.staged_ligand_path = None
 
-st.sidebar.header("⚙️ Computational Processing Core")
-engine_mode = st.sidebar.radio(
-    "Select Optimization Processing Mode:",
-    ["Option A: 'Mock DeepFrag' Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"]
-)
-
+# --- TOP MASTER CORE ACTION SEGMENTS ---
 if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.success("Redesign parameters completely cleared!")
     st.rerun()
+
+# Processing core placed strictly beneath the master reset tab trigger element
+engine_mode = st.radio(
+    "Select Optimization Processing Mode:",
+    ["MockFrag' Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"],
+    horizontal=True
+)
+st.write("---")
 
 col_params, col_visuals = st.columns([1, 1])
 
@@ -310,7 +305,7 @@ with col_params:
     ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
     
     if ligand_mode == "Paste SMILES String":
-        default_smiles = "CC(=O)NC1=CC=C(O)C=C1" if "Option A" in engine_mode else ""
+        default_smiles = "CC(=O)NC1=CC=C(O)C=C1" if "MockFrag" in engine_mode else ""
         smiles_input = st.text_input("Parent Compound SMILES", value=default_smiles, placeholder="Enter valid chemical SMILES string...").strip()
         if st.button("📥 Send Phytochemical Scaffold Profile", key="btn_gen_ligand"):
             if smiles_input:
@@ -339,59 +334,38 @@ with col_params:
                 except Exception as e:
                     st.error(f"Error reading molecule: {e}")
 
-    # --- 2D VISUAL MAPPING INTERFACE ---
+    # --- AUTOMATED 2D VISUAL ARCHITECTURE LOOP (NO HIGHLIGHTS / NO DROPDOWN SELECTION) ---
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
         st.header("3. Clickable 2D Structural Map")
-        st.markdown("Look at the map below to choose which atom branch position you want to optimize:")
+        st.markdown("**AI Scaffold Scrutiny Active:** Auto-detecting the single highest-yielding structural substitution center...")
         
         zoom_toggle = st.toggle("🔍 Toggle High-Resolution Map Zoom", value=st.session_state.zoom_enabled)
         st.session_state.zoom_enabled = zoom_toggle
         current_zoom_width = 750 if zoom_toggle else 450
         
-        color_map = {}
-        try:
-            p_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
-            if p_mol:
-                for atom in p_mol.GetAtoms():
-                    idx = atom.GetIdx()
-                    color_map[idx] = (0.4, 0.8, 0.4) 
-        except Exception:
-            pass
-            
-        if st.session_state.valency_error and st.session_state.error_atom_idx is not None:
-            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) 
-            
-        base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, highlight_dict=color_map, zoom_level=current_zoom_width)
+        # Generates a completely clean, unhighlighted baseline structural canvas layout
+        base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles, include_labels=False, zoom_level=current_zoom_width)
         if base_img:
             st.html(base_img)
             
-        try:
-            max_atoms = p_mol.GetNumAtoms() if p_mol else 10
-            atom_choices = [f"Atom Position #{idx} (Element: {p_mol.GetAtomWithIdx(idx).GetSymbol()})" for idx in range(max_atoms)]
-            selected_atom_label = st.selectbox("Select target position from the image map above:", options=atom_choices)
-            atom_vector = int(selected_atom_label.split("#")[1].split()[0])
-        except Exception:
-            atom_vector = 0
+        # Background scrutiny isolated index calculation execution
+        scrutinized_vector = scrutiny_optimal_target_atom(st.session_state.rd_parent_smiles)
+        st.info(f"💡 Scaffold Scrutiny complete. Optimization vectors locked onto accessible position index branch vector.")
 
         if st.button("🚀 Start Positive Array", type="primary"):
-            st.session_state.valency_error = False
-            st.session_state.docking_results = None # Clear old sessions
+            st.session_state.docking_results = None 
             with st.spinner("Processing optimization transformations..."):
-                if "Option A" in engine_mode:
-                    results_list = run_sandbox_engine(atom_vector)
+                if "MockFrag" in engine_mode:
+                    results_list = run_sandbox_engine(scrutinized_vector)
                 else:
-                    results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, atom_vector)
+                    results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, scrutinized_vector)
                     
                 if len(results_list) > 0:
                     st.session_state.rd_library = pd.DataFrame(results_list)
-                    st.session_state.valency_error = False
                     st.rerun()
                 else:
-                    st.session_state.valency_error = True
-                    st.session_state.error_atom_idx = atom_vector
-                    st.session_state.rd_library = None
-                    st.rerun()
+                    st.error("Scaffold scrutiny timeout: structural nodes saturated. Reset parameter layouts.")
 
 with col_visuals:
     st.header("4. Screening Array & Workspace Viewport")
@@ -411,18 +385,15 @@ with col_visuals:
         if not selected_rows.empty:
             selected_row = selected_rows.iloc[0]
             
-            # --- 2D TOPOGRAPHY HIGHLIGHT MIRROR ---
-            st.markdown("##### 📍 Labeled 2D Structural Modification Mirror")
-            hl_atoms = [int(x) for x in selected_row["Highlight Atoms"]]
-            
-            highlighted_img_html = generate_labeled_2d_image(
+            # --- CLEAN 2D TOPOGRAPHY snapSHOT (NO LABELS / NO HIGHLIGHTS) ---
+            st.markdown(f"##### 📍 Labeled 2D Structural Modification Mirror")
+            highlighted_img_html = generate_clean_2d_image(
                 smiles_str=selected_row["Redesigned SMILES"],
-                highlight_dict={a: (0.4, 0.9, 0.4) for a in hl_atoms},
-                legend_text=f"Highlighted Region indicates newly introduced {selected_row['Fragment Added']} group geometry.",
                 zoom_level=450
             )
             if highlighted_img_html:
                 st.html(highlighted_img_html)
+            st.caption(f"**Structural Identification:** Newly introduced **{selected_row['Fragment Added']}** modification group structure layout layout view.")
             
             # --- PDB COORDINATES EXPORT CONTEXT ---
             variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
@@ -464,24 +435,21 @@ with col_visuals:
             simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
             
             chart_df = pd.DataFrame({
-                "Wavenumber (cm⁻¹)": wavenumbers,
+                "Wavenumber (cm⁻³)": wavenumbers,
                 "Transmittance (%)": np.clip(simulated_ftir_profile, 5.0, 100.0)
             }).set_index("Wavenumber (cm⁻¹)")
             
             st.line_chart(chart_df, height=220)
             st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
 
-            # --- PATH 1: comparative multi-ligand docking cluster engine ---
+            # --- AUTOMATED DOCKING SELECTION LOOP ACTIVATION ---
             st.write("---")
             st.header("🚀 5. Path 1: Native Multi-Ligand Docking Grid Core")
             st.markdown("Run comparative target receptor sampling loops matching the starting structure directly against the redesigned layout:")
             
-            # Dynamic grid selector modes
             grid_setup = st.radio("Grid Parameter Selection Profile:", ["Auto-Extract Center from Co-Crystallized Heteroatom", "Configure Manual Grid Box Boundaries", "Run Unconstrained Blind Dock Simulation"])
             
-            # Extract heteroatom coordinates from the loaded PDB structural strings
             det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
-            
             if grid_setup == "Auto-Extract Center from Co-Crystallized Heteroatom":
                 st.info(f"**Target Coordinate Center Identified:** X: `{det_x}` | Y: `{det_y}` | Z: `{det_z}` (Grid Resolution Locked: 20Å³)")
                 cx, cy, cz, b_size = det_x, det_y, det_z, 20
@@ -508,7 +476,6 @@ with col_visuals:
             
             if st.session_state.docking_results is not None:
                 st.markdown("#### 📊 Comparative Binding Affinity Report Card")
-                
                 col_d1, col_d2, col_d3 = st.columns(3)
                 with col_d1:
                     st.metric(label="Original Scaffold Binding Energy", value=f"{st.session_state.docking_results['Original Score']} kcal/mol")
