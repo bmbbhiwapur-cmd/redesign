@@ -40,8 +40,8 @@ def generate_pdb_string_from_smiles(smiles_str):
         pass
     return None
 
-def generate_labeled_2d_image(smiles_str):
-    """Generates a 2D image of the molecule where each atom is labeled with its index mapping."""
+def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Locate your target position number below:"):
+    """Generates a 2D image of the molecule with labeled indices and optional functional group highlighting."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
@@ -49,11 +49,17 @@ def generate_labeled_2d_image(smiles_str):
             for atom in mol_to_draw.GetAtoms():
                 atom.SetProp('atomNote', f"#{atom.GetIdx()}")
             
-            img = Draw.MolToImage(mol_to_draw, size=(450, 350), legend="Locate your target position number below:")
+            # Setup neon visualization parameters if sub-fragment highlighting array indices exist
+            kwargs = {}
+            if highlight_atoms is not None:
+                kwargs['highlightAtoms'] = highlight_atoms
+                kwargs['highlightColor'] = (0.4, 0.9, 0.4) # Bright soft green functional group ring trace
+            
+            img = Draw.MolToImage(mol_to_draw, size=(450, 350), legend=legend_text, **kwargs)
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
             img_str = base64.b64encode(buffered.getvalue()).decode()
-            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom:15px;"/>'
+            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom:15px;"/>'
     except Exception:
         pass
     return "<p style='color:red;'>Visual mapping error.</p>"
@@ -98,6 +104,9 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             logp = round(Descriptors.MolLogP(derived_mol), 2)
             simulated_score = round(0.95 - (idx * 0.03) - (abs(logp) * 0.01), 2)
             
+            # Map tracking array index positions of newly introduced fragment atoms for visualization rendering
+            added_indices = list(range(num_atoms, derived_mol.GetNumAtoms()))
+            
             derived_library.append({
                 "Variant ID": f"Derivative-{idx+1:02d} (Rank {idx+1})",
                 "Fragment Added": frag["name"],
@@ -107,7 +116,8 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
                 "LogP": logp,
                 "Yield Prediction": frag["yield"],
                 "Route": frag["route"],
-                "FTIR Peak": frag["peak"]
+                "FTIR Peak": frag["peak"],
+                "Highlight Atoms": added_indices
             })
         except Exception:
             fallback_smiles = f"{frag['smiles']}{parent_smiles}".replace("==", "=")
@@ -127,7 +137,8 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
                 "LogP": logp,
                 "Yield Prediction": frag["yield"],
                 "Route": frag["route"],
-                "FTIR Peak": frag["peak"]
+                "FTIR Peak": frag["peak"],
+                "Highlight Atoms": [0]
             })
             
     return sorted(derived_library, key=lambda x: x["Delta Score"], reverse=True)
@@ -145,7 +156,7 @@ def render_comparison_viewport(parent_pdb, variant_pdb):
             <div id="container_parent" style="height: 320px; border: 1px solid #eaeaea; border-radius: 8px; background: #ffffff;"></div>
         </div>
         <div style="flex: 1;">
-            <div style="text-align: center; font-weight: bold; font-family: sans-serif; margin-bottom: 5px; font-size: 14px; color: #2e7d32;">AI Redesigned Variant</div>
+            <div style="text-align: center; font-weight: bold; font-family: sans-serif; margin-bottom: 5px; font-size: 14px; color: #2e7d32;">3D Topography Variant Matrix</div>
             <div id="container_variant" style="height: 320px; border: 1px solid #eaeaea; border-radius: 8px; background: #ffffff;"></div>
         </div>
     </div>
@@ -180,14 +191,13 @@ st.markdown("""
 **InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India | Contact: sarangresearch@gmail.com
 """)
 
-# Initialize background caching states safely
+# Initialize state trackers safely
 if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
 if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = "CC(=O)NC1=CC=C(O)C=C1" 
 if "rd_library" not in st.session_state: st.session_state.rd_library = None
 
-# Fallback bootstrap logic to guarantee active base matrices
-if st.session_state.rd_ligand is None and st.session_state.rd_parent_smiles:
+if st.session_state.rd_ligand is None:
     st.session_state.rd_ligand = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
 
 # --- MASTER ENVIRONMENT RESET ACTIONS ---
@@ -201,6 +211,13 @@ col_params, col_visuals = st.columns([1, 1])
 
 with col_params:
     st.header("1. Target Protein Grid Matrix")
+    
+    # High-visibility matrix structural alignment check banner
+    if st.session_state.rd_receptor:
+        st.success("🟢 Target Protein Matrix Ready for Operations")
+    else:
+        st.error("🔴 Matrix Vector Alert: Target protein structure has not been initialized yet.")
+        
     protein_mode = st.radio("Protein Input Setup:", ["Download PDB ID", "Upload Local Structure File"])
     
     if protein_mode == "Download PDB ID":
@@ -210,7 +227,6 @@ with col_params:
                 ok, path = fetch_pdb_from_rcsb(pdb_id)
                 if ok:
                     st.session_state.rd_receptor = path
-                    st.success(f"Protein Matrix {pdb_id.upper()} initialized safely!")
                     st.rerun()
                 else:
                     st.error(path)
@@ -222,11 +238,17 @@ with col_params:
                 with open(path, "wb") as f:
                     f.write(uploaded_rec.getbuffer())
                 st.session_state.rd_receptor = path
-                st.success("Target receptor geometry locked.")
                 st.rerun()
 
     st.write("---")
     st.header("2. Phytochemical Scaffold Profile")
+    
+    # High-visibility ligand structural validation banner
+    if st.session_state.rd_ligand:
+        st.success("🟢 Phytochemical Lead Scaffold Coordinates Ready")
+    else:
+        st.error("🔴 Scaffold Coordinate Alert: Small molecule ligand input coordinates missing.")
+        
     ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
     
     if ligand_mode == "Paste SMILES String":
@@ -235,23 +257,22 @@ with col_params:
             if smiles_input:
                 st.session_state.rd_parent_smiles = smiles_input
                 st.session_state.rd_ligand = generate_pdb_string_from_smiles(smiles_input)
-                st.success("Parent atomic structural coordinates anchored successfully!")
                 st.rerun()
     else:
         uploaded_lig = st.file_uploader("Upload Molecule Block (.PDB, .SDF)", type=["pdb", "sdf"])
         if uploaded_lig:
             path = f"rd_lig_{uploaded_lig.name}"
-            with open(path, "wb") as f:
-                f.write(uploaded_lig.getbuffer())
-            try:
-                mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
-                if mol:
-                    st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
-                    st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
-                    st.success("Lead file coordinates saved.")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Error reading molecule: {e}")
+            if st.session_state.rd_parent_smiles != path:
+                with open(path, "wb") as f:
+                    f.write(uploaded_lig.getbuffer())
+                try:
+                    mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
+                    if mol:
+                        st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+                        st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error reading molecule: {e}")
 
     # --- 2D VISUAL MAPPING INTERFACE ---
     if st.session_state.rd_parent_smiles:
@@ -276,14 +297,11 @@ with col_params:
         except Exception:
             atom_vector = 0
 
-        # REINFORCED EXECUTION FLAGS: If no receptor protein is loaded yet, 
-        # it fallback-allows screening analytics generation directly on the small-molecule matrix
         can_run = bool(st.session_state.rd_ligand is not None)
-        
         if st.button("🚀 Execute 10-Pose Redesign Optimization Array", type="primary", disabled=not can_run):
             with st.spinner("Processing deep optimization forward layers..."):
                 results_df = generate_dynamic_derivatives(st.session_state.rd_parent_smiles, atom_vector)
-                st.session_state.rd_library = pd.DataFrame(results_df)
+                st.session_state.rd_library = results_df
                 st.rerun()
 
 with col_visuals:
@@ -297,10 +315,23 @@ with col_visuals:
         )
         
         st.write("---")
-        st.subheader("🔍 Selection Isolation & 3D Topography Mirror")
-        chosen_variant_id = st.selectbox("Isolate variant to map properties:", options=st.session_state.rd_library["Variant ID"])
+        st.subheader("🔍 Selection Isolation & 2D/3D Topography Mirror")
+        chosen_variant_id = st.selectbox("Isolate variant to map structural modifications:", options=st.session_state.rd_library["Variant ID"])
         
+        # Pull records directly matching the full structural index identifier
         selected_row = st.session_state.rd_library[st.session_state.rd_library["Variant ID"] == chosen_variant_id].iloc[0]
+        
+        # --- NEW 2D TOPOGRAPHY HIGHLIGHT MIRROR ---
+        st.markdown("##### 📍 Labeled 2D Structural Modification Mirror")
+        highlighted_img_html = generate_labeled_2d_image(
+            smiles_str=selected_row["Redesigned SMILES"],
+            highlight_atoms=selected_row["Highlight Atoms"],
+            legend_text=f"Highlighted Region indicates newly introduced {selected_row['Fragment Added']} group geometry."
+        )
+        st.html(highlighted_img_html)
+        
+        # --- 3D TOPOGRAPHY VIEWPORT ---
+        st.markdown("##### 🧬 Co-Crystallized 3D Conformational Space")
         variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
         
         if variant_pdb_string and st.session_state.rd_ligand:
