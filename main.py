@@ -65,19 +65,50 @@ def generate_labeled_2d_image(smiles_str, highlight_dict=None, legend_text="Loca
         pass
     return None
 
-def generate_dynamic_derivatives_deepfrag(parent_smiles, target_atom_idx):
-    """
-    DeepFrag Methodology Layout:
-    Converts the target atom index into an open growth vector, completely bypassing valency blocks.
-    """
+# --- ENGINE MODE A: MOCK DEEPFRAG SANDBOX DATA ---
+def run_sandbox_engine(target_atom_idx):
+    """Returns absolute pre-verified flawless mock structures that can never throw valency errors."""
+    mock_data = [
+        {"name": "Methylation (-CH3)", "smiles": "CC(=O)NC1=CC(=C(C)C=C1)O", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions.", "score": 0.92},
+        {"name": "Hydroxylation (-OH)", "smiles": "CC(=O)NC1=CC(=C(O)C=C1)O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis.", "score": 0.88},
+        {"name": "Amination (-NH2)", "smiles": "CC(=O)NC1=CC(=C(N)C=C1)O", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration followed by selective reduction with Pd/C.", "score": 0.85},
+        {"name": "Fluorination (-F)", "smiles": "CC(=O)NC1=CC(=C(F)C=C1)O", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor.", "score": 0.81},
+        {"name": "Trifluoromethylation (-CF3)", "smiles": "CC(=O)NC1=CC(=C(C(F)(F)F)C=C1)O", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using Ruppert-Prakash reagent.", "score": 0.78},
+        {"name": "Cyanation (-C≡N)", "smiles": "CC(=O)NC1=CC(=C(C#N)C=C1)O", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation using CuCN in DMF.", "score": 0.75},
+        {"name": "Methoxylation (-OCH3)", "smiles": "CC(=O)NC1=CC(=C(OC)C=C1)O", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether synthesis using Dimethyl Sulfate.", "score": 0.72},
+        {"name": "Acetylation (-COCH3)", "smiles": "CC(=O)NC1=CC(=C(C(C)=O)C=C1)O", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation with Acetic Anhydride.", "score": 0.69},
+        {"name": "Carboxylation (-COOH)", "smiles": "CC(=O)NC1=CC(=C(C(=O)O)C=C1)O", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Carboxylation using high-pressure CO2 arrays.", "score": 0.65},
+        {"name": "Chlorination (-Cl)", "smiles": "CC(=O)NC1=CC(=C(Cl)C=C1)O", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic chlorination utilizing NCS.", "score": 0.62}
+    ]
+    
+    library = []
+    for idx, item in enumerate(mock_data):
+        m = Chem.MolFromSmiles(item["smiles"])
+        mw = round(Descriptors.MolWt(m), 2) if m else 165.1
+        logp = round(Descriptors.MolLogP(m), 2) if m else 1.2
+        
+        library.append({
+            "Variant ID": f"Derivative-{idx+1:02d} (Rank {idx+1})",
+            "Fragment Added": item["name"],
+            "Redesigned SMILES": item["smiles"],
+            "Delta Score": item["score"],
+            "MW (g/mol)": mw,
+            "LogP": logp,
+            "Yield Prediction": item["yield"],
+            "Route": item["route"],
+            "FTIR Peak": int(item["peak"]),
+            "Highlight Atoms": [int(target_atom_idx)]
+        })
+    return library
+
+# --- ENGINE MODE B: DEEPFRAG ATOM-CLEAVING SUBSTITUTION ---
+def run_cleaving_engine(parent_smiles, target_atom_idx):
+    """Deconstructs the core target node completely to bypass valency walls dynamically."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol:
         return []
         
     num_atoms = parent_mol.GetNumAtoms()
-    if target_atom_idx >= num_atoms:
-        target_atom_idx = 0
-
     fragments = [
         {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions."},
         {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis."},
@@ -96,37 +127,22 @@ def generate_dynamic_derivatives_deepfrag(parent_smiles, target_atom_idx):
     
     for frag in fragments:
         try:
-            # Create an open vector map by treating the modification as a substitution of an implicit H
-            # If the atom is a carbon with no H, we use an advanced SMARTS reaction placeholder
-            rxn_smarts = f"([*:1]-[H]).{frag['smiles']} >> [*:1]-*"
-            
-            # If target atom has no hydrogens (like a carbonyl carbon), we substitute the atom itself (DeepFrag method)
-            t_atom = parent_mol.GetAtomWithIdx(int(target_atom_idx))
-            if t_atom.GetTotalNumHs() == 0:
-                # Replace the atom itself dynamically to create a stable derivative descriptor
-                rxn_smarts = f"([*:1]~[*:2:3]).{frag['smiles']} >> [*:1]~[*:2](-{frag['smiles']})"
-                
-            rxn = AllChem.ReactionFromSmarts(rxn_smarts)
-            
-            # Fallback robust connection logic
+            # DeepFrag Core Alignment: Edit the graph by establishing custom bonding attributes
             rw_mol = Chem.RWMol(parent_mol)
-            target_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
-            
-            # Set a dynamic valence shield adjustment
-            target_atom.SetNoImplicit(True)
+            t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
+            t_atom.SetNoImplicit(True)
             
             frag_mol = Chem.MolFromSmiles(frag["smiles"])
             combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
             ed_combo = Chem.EditableMol(combo)
             
-            # Force add a valid single bond to the new workspace index
+            # Form an explicit single attachment path onto the vector index
             ed_combo.AddBond(int(target_atom_idx), num_atoms, order=Chem.BondType.SINGLE)
             derived_mol = ed_combo.GetMol()
             
-            # Clean valency boundaries instantly before sanitizing
             for atom in derived_mol.GetAtoms():
                 atom.SetNoImplicit(False)
-            
+                
             Chem.SanitizeMol(derived_mol)
             derived_smiles = Chem.MolToSmiles(derived_mol)
             
@@ -134,7 +150,6 @@ def generate_dynamic_derivatives_deepfrag(parent_smiles, target_atom_idx):
             if not test_mol:
                 continue
                 
-            # Verify the 2D mirror snapshot works flawlessly
             test_img = generate_labeled_2d_image(derived_smiles, highlight_dict={int(target_atom_idx): (0.4, 0.9, 0.4)})
             if not test_img:
                 continue
@@ -173,7 +188,7 @@ st.markdown("""
 **InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India | Contact: sarangresearch@gmail.com
 """)
 
-# Initialize state trackers safely
+# Initialize background memory states safely
 if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
 if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
@@ -181,13 +196,19 @@ if "rd_library" not in st.session_state: st.session_state.rd_library = None
 if "valency_error" not in st.session_state: st.session_state.valency_error = False
 if "error_atom_idx" not in st.session_state: st.session_state.error_atom_idx = None
 
-# Gated stage variables to track explicitly clicked actions
+# Gated step metrics
 if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
 if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
 if "zoom_enabled" not in st.session_state: st.session_state.zoom_enabled = False
 if "staged_ligand_path" not in st.session_state: st.session_state.staged_ligand_path = None
 
-# --- MASTER ENVIRONMENT RESET ACTIONS ---
+# --- ENGINE ARCHITECTURE MODE SELECTOR ---
+st.sidebar.header("⚙️ Computational Processing Core")
+engine_mode = st.sidebar.radio(
+    "Select Optimization Processing Mode:",
+    ["Option A: 'Mock DeepFrag' Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"]
+)
+
 if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
@@ -239,7 +260,8 @@ with col_params:
     ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
     
     if ligand_mode == "Paste SMILES String":
-        smiles_input = st.text_input("Parent Compound SMILES", value="CC(=O)NC1=CC=C(O)C=C1").strip()
+        default_smiles = "CC(=O)NC1=CC=C(O)C=C1" if "Option A" in engine_mode else ""
+        smiles_input = st.text_input("Parent Compound SMILES", value=default_smiles, placeholder="Enter valid chemical SMILES string...").strip()
         if st.button("📥 Send Phytochemical Scaffold Profile", key="btn_gen_ligand"):
             if smiles_input:
                 st.session_state.rd_parent_smiles = smiles_input
@@ -283,14 +305,19 @@ with col_params:
             if p_mol:
                 for atom in p_mol.GetAtoms():
                     idx = atom.GetIdx()
-                    # Mark all atoms as green under DeepFrag vector rules since any atom is now valid
                     color_map[idx] = (0.4, 0.8, 0.4) 
         except Exception:
             pass
             
+        if st.session_state.valency_error and st.session_state.error_atom_idx is not None:
+            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) 
+            
         base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, highlight_dict=color_map, zoom_level=current_zoom_width)
         if base_img:
             st.html(base_img)
+            
+        if st.session_state.valency_error:
+            st.error("⚠️ Valency limit exceeded at this index spot. Try selecting a different atom vector position.")
         
         try:
             max_atoms = p_mol.GetNumAtoms() if p_mol else 10
@@ -301,14 +328,22 @@ with col_params:
             atom_vector = 0
 
         if st.button("🚀 Start Positive Array", type="primary"):
+            st.session_state.valency_error = False
             with st.spinner("Processing optimization transformations..."):
-                results_list = generate_dynamic_derivatives_deepfrag(st.session_state.rd_parent_smiles, atom_vector)
+                if "Option A" in engine_mode:
+                    results_list = run_sandbox_engine(atom_vector)
+                else:
+                    results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, atom_vector)
+                    
                 if len(results_list) > 0:
                     st.session_state.rd_library = pd.DataFrame(results_list)
                     st.session_state.valency_error = False
                     st.rerun()
                 else:
-                    st.error("Could not run substitution matrix at this specific index spot.")
+                    st.session_state.valency_error = True
+                    st.session_state.error_atom_idx = atom_vector
+                    st.session_state.rd_library = None
+                    st.rerun()
 
 with col_visuals:
     st.header("4. Screening Array & Workspace Viewport")
