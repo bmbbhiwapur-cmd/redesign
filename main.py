@@ -54,7 +54,6 @@ def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Loc
                 kwargs['highlightAtoms'] = highlight_atoms
                 kwargs['highlightColor'] = (0.4, 0.9, 0.4)
             
-            # Use dynamic dimensions to control zoom layout presentation rules
             img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)), legend=legend_text, **kwargs)
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
@@ -201,6 +200,7 @@ if "rd_library" not in st.session_state: st.session_state.rd_library = None
 if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
 if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
 if "zoom_enabled" not in st.session_state: st.session_state.zoom_enabled = False
+if "staged_ligand_path" not in st.session_state: st.session_state.staged_ligand_path = None
 
 # --- MASTER ENVIRONMENT RESET ACTIONS ---
 if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
@@ -214,7 +214,6 @@ col_params, col_visuals = st.columns([1, 1])
 with col_params:
     st.header("1. Target Protein Grid Matrix")
     
-    # Render validation status text ONLY based on explicit processing action criteria
     if st.session_state.protein_parsed and st.session_state.rd_receptor:
         st.success("🟢 Target Protein Matrix Ready for Operations")
     else:
@@ -237,7 +236,6 @@ with col_params:
         uploaded_rec = st.file_uploader("Upload Macromolecule PDB", type=["pdb"])
         if uploaded_rec:
             path = f"rd_rec_{uploaded_rec.name}"
-            # Let the parse target vector button trigger the file storage sequence cleanly
             if st.button("📥 Parse Target Vector from File", key="btn_parse_file_protein"):
                 with open(path, "wb") as f:
                     f.write(uploaded_rec.getbuffer())
@@ -250,3 +248,61 @@ with col_params:
     
     if st.session_state.ligand_parsed and st.session_state.rd_ligand:
         st.success("🟢 Phytochemical Lead Scaffold Coordinates Ready")
+    else:
+        st.error("🔴 Scaffold Coordinate Alert: Small molecule ligand input coordinates missing.")
+        
+    ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
+    
+    if ligand_mode == "Paste SMILES String":
+        smiles_input = st.text_input("Parent Compound SMILES", value="CC(=O)NC1=CC=C(O)C=C1").strip()
+        if st.button("🔧 Generate Conformer Matrix", key="btn_gen_ligand"):
+            if smiles_input:
+                st.session_state.rd_parent_smiles = smiles_input
+                st.session_state.rd_ligand = generate_pdb_string_from_smiles(smiles_input)
+                st.session_state.ligand_parsed = True
+                st.rerun()
+    else:
+        uploaded_lig = st.file_uploader("Upload Molecule Block (.PDB, .SDF)", type=["pdb", "sdf"])
+        if uploaded_lig:
+            # FIX: Write the uploaded file bytes to local disk storage IMMEDIATELY to avoid buffer drops
+            local_path = f"rd_lig_{uploaded_lig.name}"
+            with open(local_path, "wb") as f:
+                f.write(uploaded_lig.getbuffer())
+            st.session_state.staged_ligand_path = local_path
+            
+        if st.session_state.staged_ligand_path is not None:
+            if st.button("🔧 Generate Conformer Matrix from File", key="btn_gen_file_ligand"):
+                try:
+                    path = st.session_state.staged_ligand_path
+                    mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
+                    if mol:
+                        st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+                        st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
+                        st.session_state.ligand_parsed = True
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error reading molecule: {e}")
+
+    # --- 2D VISUAL MAPPING INTERFACE GATED BY INPUT READY METRICS ---
+    if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
+        st.write("---")
+        st.header("3. Clickable 2D Structural Map")
+        st.markdown("Look at the map below to choose which atom branch position you want to optimize:")
+        
+        zoom_toggle = st.toggle("🔍 Toggle High-Resolution Map Zoom", value=st.session_state.zoom_enabled)
+        st.session_state.zoom_enabled = zoom_toggle
+        current_zoom_width = 750 if zoom_toggle else 450
+        
+        img_html = generate_labeled_2d_image(st.session_state.rd_parent_smiles, zoom_level=current_zoom_width)
+        st.html(img_html)
+        
+        try:
+            p_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
+            max_atoms = p_mol.GetNumAtoms() if p_mol else 10
+            
+            atom_choices = []
+            for idx in range(max_atoms):
+                sym = p_mol.GetAtomWithIdx(idx).GetSymbol()
+                atom_choices.append(f"Atom Position #{idx} (Element: {sym})")
+                
+            selected_atom
