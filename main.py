@@ -40,8 +40,8 @@ def generate_pdb_string_from_smiles(smiles_str):
         pass
     return None
 
-def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Locate your target position number below:", zoom_level=450):
-    """Generates a 2D image of the molecule with labeled indices, custom dimensions, and optional highlighting safely."""
+def generate_labeled_2d_image(smiles_str, highlight_dict=None, legend_text="Locate your target position number below:", zoom_level=450):
+    """Generates a 2D image of the molecule with custom colored atom highlights (Red/Green/Yellow)."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
@@ -50,12 +50,10 @@ def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Loc
                 atom.SetProp('atomNote', f"#{atom.GetIdx()}")
             
             kwargs = {}
-            if highlight_atoms is not None:
-                # Guarantee it passes strictly formatted clean Python integer values inside lists
-                safe_highlights = [int(x) for x in highlight_atoms if x < mol_to_draw.GetNumAtoms()]
-                if safe_highlights:
-                    kwargs['highlightAtoms'] = safe_highlights
-                    kwargs['highlightColor'] = (0.4, 0.9, 0.4)
+            if highlight_dict:
+                # Format mappings for RDKit color configurations
+                kwargs['highlightAtoms'] = list(highlight_dict.keys())
+                kwargs['highlightAtomColors'] = highlight_dict
             
             img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)), legend=legend_text, **kwargs)
             buffered = io.BytesIO()
@@ -67,10 +65,10 @@ def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Loc
     return None
 
 def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
-    """Programmatically attaches functional groups. Validates layouts and removes broken iterations."""
+    """Programmatically attaches functional groups by running substitution matrices on available hydrogen slots."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol:
-        return pd.DataFrame()
+        return []
         
     num_atoms = parent_mol.GetNumAtoms()
     if target_atom_idx >= num_atoms:
@@ -94,11 +92,24 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     
     for frag in fragments:
         try:
+            # Explicitly remove an implicit hydrogen at the target index to prevent structural valency constraints
+            rw_mol = Chem.RWMol(parent_mol)
+            target_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
+            
+            implicit_h = target_atom.GetNumImplicitHs()
+            explicit_h = target_atom.GetNumExplicitHs()
+            
+            if implicit_h > 0:
+                target_atom.SetNumImplicitHs(implicit_h - 1)
+            elif explicit_h > 0:
+                # Clear structural bonds if explicit hydrogen arrays exist
+                for bond in target_atom.GetBonds():
+                    if bond.GetOtherAtom(target_atom).GetSymbol() == 'H':
+                        rw_mol.RemoveBond(target_atom.GetIdx(), bond.GetOtherAtom(target_atom).GetIdx())
+                        break
+            
             frag_mol = Chem.MolFromSmiles(frag["smiles"])
-            if not frag_mol:
-                continue
-                
-            combo = Chem.ComboMol(parent_mol, frag_mol)
+            combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
             ed_combo = Chem.EditableMol(combo)
             new_atom_idx = num_atoms 
             ed_combo.AddBond(int(target_atom_idx), new_atom_idx, order=Chem.BondType.SINGLE)
@@ -107,13 +118,12 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             Chem.SanitizeMol(derived_mol)
             derived_smiles = Chem.MolToSmiles(derived_mol)
             
-            # Double-check validation gate: Ensure the derived SMILES can be re-parsed completely
             test_mol = Chem.MolFromSmiles(derived_smiles)
             if not test_mol:
                 continue
                 
-            # Verify the 2D canvas can handle rendering this specific structure
-            test_img = generate_labeled_2d_image(derived_smiles, highlight_atoms=[num_atoms])
+            # Gated check: If the mirror image layout fails to draw, drop it from the array track completely
+            test_img = generate_labeled_2d_image(derived_smiles, highlight_dict={num_atoms: (0.4, 0.9, 0.4)})
             if not test_img:
                 continue
             
@@ -136,12 +146,9 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             })
             rank_counter += 1
         except Exception:
-            continue # Quietly drops valency failures to maintain app stability
+            continue
             
-    if not derived_library:
-        return pd.DataFrame()
-        
-    return sorted(derived_library, key=lambda x: x["Delta Score"], reverse=True)
+    return derived_library
 
 
 # --- APPLICATION SETUP ---
@@ -156,6 +163,8 @@ if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
 if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
 if "rd_library" not in st.session_state: st.session_state.rd_library = None
+if "valency_error" not in st.session_state: st.session_state.valency_error = False
+if "error_atom_idx" not in st.session_state: st.session_state.error_atom_idx = None
 
 # Gated stage variables to track explicitly clicked actions
 if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
@@ -216,7 +225,7 @@ with col_params:
     
     if ligand_mode == "Paste SMILES String":
         smiles_input = st.text_input("Parent Compound SMILES", value="CC(=O)NC1=CC=C(O)C=C1").strip()
-        if st.button("🔧 Generate Conformer Matrix", key="btn_gen_ligand"):
+        if st.button("📥 Send Phytochemical Scaffold Profile", key="btn_gen_ligand"):
             if smiles_input:
                 st.session_state.rd_parent_smiles = smiles_input
                 st.session_state.rd_ligand = generate_pdb_string_from_smiles(smiles_input)
@@ -231,7 +240,7 @@ with col_params:
             st.session_state.staged_ligand_path = local_path
             
         if st.session_state.staged_ligand_path is not None:
-            if st.button("🔧 Generate Conformer Matrix from File", key="btn_gen_file_ligand"):
+            if st.button("📥 Send Phytochemical Scaffold Profile from File", key="btn_gen_file_ligand"):
                 try:
                     path = st.session_state.staged_ligand_path
                     mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
@@ -243,51 +252,71 @@ with col_params:
                 except Exception as e:
                     st.error(f"Error reading molecule: {e}")
 
-    # --- 2D VISUAL MAPPING INTERFACE GATED BY INPUT READY METRICS ---
+    # --- 2D VISUAL MAPPING INTERFACE GATED BY LIGAND AND PROTEIN INPUT READY METRICS ---
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
         st.header("3. Clickable 2D Structural Map")
         st.markdown("Look at the map below to choose which atom branch position you want to optimize:")
         
-        # Fixed: State preservation handles zoom canvas reloads accurately
         zoom_toggle = st.toggle("🔍 Toggle High-Resolution Map Zoom", value=st.session_state.zoom_enabled)
         st.session_state.zoom_enabled = zoom_toggle
         current_zoom_width = 750 if zoom_toggle else 450
         
-        base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, zoom_level=current_zoom_width)
-        if base_img:
-            st.html(base_img)
-        else:
-            st.warning("Awaiting clear scaffold image rendering initialization profiles...")
-        
+        # Build colored map dictionary based on chemical efficiency definitions
+        color_map = {}
         try:
             p_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
-            max_atoms = p_mol.GetNumAtoms() if p_mol else 10
+            if p_mol:
+                for atom in p_mol.GetAtoms():
+                    idx = atom.GetIdx()
+                    # Assign Green to high-efficiency spots (heteroatoms/ring links) and yellow to terminal ends
+                    if atom.GetSymbol() in ["O", "N"] or atom.GetIsAromatic():
+                        color_map[idx] = (0.4, 0.8, 0.4) # Soft Green
+                    else:
+                        color_map[idx] = (0.9, 0.9, 0.4) # Soft Yellow
+        except Exception:
+            pass
             
-            atom_choices = []
-            for idx in range(max_atoms):
-                sym = p_mol.GetAtomWithIdx(idx).GetSymbol()
-                atom_choices.append(f"Atom Position #{idx} (Element: {sym})")
-                
+        # Overwrite selected atom to bright red if error flag is tripped
+        if st.session_state.valency_error and st.session_state.error_atom_idx is not None:
+            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) # Solid Red
+            
+        base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, highlight_dict=color_map, zoom_level=current_zoom_width)
+        if base_img:
+            st.html(base_img)
+            
+        if st.session_state.valency_error:
+            st.error("⚠️ Valency limit exceeded at this index spot. Try selecting a different atom vector position.")
+        
+        try:
+            max_atoms = p_mol.GetNumAtoms() if p_mol else 10
+            atom_choices = [f"Atom Position #{idx} (Element: {p_mol.GetAtomWithIdx(idx).GetSymbol()})" for idx in range(max_atoms)]
             selected_atom_label = st.selectbox("Select target position from the image map above:", options=atom_choices)
             atom_vector = int(selected_atom_label.split("#")[1].split()[0])
         except Exception:
             atom_vector = 0
 
-        if st.button("🚀 Execute 10-Pose Redesign Optimization Array", type="primary"):
-            with st.spinner("Processing deep optimization forward layers..."):
+        # RENAME FIELD: Reworked list generator trigger button to Start Positive Array
+        if st.button("🚀 Start Positive Array", type="primary"):
+            st.session_state.valency_error = False
+            with st.spinner("Processing optimization transformations..."):
                 results_list = generate_dynamic_derivatives(st.session_state.rd_parent_smiles, atom_vector)
                 if len(results_list) > 0:
                     st.session_state.rd_library = pd.DataFrame(results_list)
+                    st.session_state.valency_error = False
                     st.rerun()
                 else:
-                    st.error("Valency limit exceeded at this index spot. Try selecting a different atom vector position.")
+                    # Flash red dot indicator configuration coordinates
+                    st.session_state.valency_error = True
+                    st.session_state.error_atom_idx = atom_vector
+                    st.session_state.rd_library = None
+                    st.rerun()
 
 with col_visuals:
     st.header("4. Screening Array & Workspace Viewport")
     
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_library is not None:
-        st.markdown("### 🏆 Enhancing Properties Ranking Matrix (Sorted by Score)")
+        st.markdown("### 🏆 Enhancing Properties Ranking Matrix")
         st.dataframe(
             st.session_state.rd_library[["Variant ID", "Fragment Added", "Redesigned SMILES", "Delta Score", "MW (g/mol)", "LogP"]],
             hide_index=True, use_container_width=True
@@ -303,16 +332,18 @@ with col_visuals:
             
             # --- 2D TOPOGRAPHY HIGHLIGHT MIRROR ---
             st.markdown("##### 📍 Labeled 2D Structural Modification Mirror")
+            
+            # Formats clean integer array indexes for highlighting newly appended fragments safely
+            hl_atoms = [int(x) for x in selected_row["Highlight Atoms"]]
+            
             highlighted_img_html = generate_labeled_2d_image(
                 smiles_str=selected_row["Redesigned SMILES"],
-                highlight_atoms=selected_row["Highlight Atoms"],
+                highlight_dict={a: (0.4, 0.9, 0.4) for a in hl_atoms},
                 legend_text=f"Highlighted Region indicates newly introduced {selected_row['Fragment Added']} group geometry.",
                 zoom_level=450
             )
             if highlighted_img_html:
                 st.html(highlighted_img_html)
-            else:
-                st.info("Generating highlighted visual matrix blocks...")
             
             # --- PDB COORDINATES EXPORT CONTEXT ---
             variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
