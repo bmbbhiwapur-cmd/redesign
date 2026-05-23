@@ -105,11 +105,9 @@ def scrutiny_optimal_target_atom(smiles_str):
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
-            # Prioritize open, synthetically accessible heteroatom centers (Oxygen or Nitrogen vectors)
             for atom in mol.GetAtoms():
                 if atom.GetSymbol() in ["O", "N"] and atom.GetTotalNumHs() > 0:
                     return atom.GetIdx()
-            # Fallback to standard open ring position vectors
             for atom in mol.GetAtoms():
                 if atom.GetTotalNumHs() > 0:
                     return atom.GetIdx()
@@ -252,7 +250,6 @@ if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_con
     st.success("Redesign parameters completely cleared!")
     st.rerun()
 
-# Processing core placed strictly beneath the master reset tab trigger element
 engine_mode = st.radio(
     "Select Optimization Processing Mode:",
     ["MockFrag' Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"],
@@ -334,7 +331,7 @@ with col_params:
                 except Exception as e:
                     st.error(f"Error reading molecule: {e}")
 
-    # --- AUTOMATED 2D VISUAL ARCHITECTURE LOOP (NO HIGHLIGHTS / NO DROPDOWN SELECTION) ---
+    # --- AUTOMATED 2D VISUAL ARCHITECTURE LOOP ---
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
         st.header("3. Clickable 2D Structural Map")
@@ -344,12 +341,10 @@ with col_params:
         st.session_state.zoom_enabled = zoom_toggle
         current_zoom_width = 750 if zoom_toggle else 450
         
-        # Generates a completely clean, unhighlighted baseline structural canvas layout
         base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles, include_labels=False, zoom_level=current_zoom_width)
         if base_img:
             st.html(base_img)
             
-        # Background scrutiny isolated index calculation execution
         scrutinized_vector = scrutiny_optimal_target_atom(st.session_state.rd_parent_smiles)
         st.info(f"💡 Scaffold Scrutiny complete. Optimization vectors locked onto accessible position index branch vector.")
 
@@ -385,7 +380,6 @@ with col_visuals:
         if not selected_rows.empty:
             selected_row = selected_rows.iloc[0]
             
-            # --- CLEAN 2D TOPOGRAPHY snapSHOT (NO LABELS / NO HIGHLIGHTS) ---
             st.markdown(f"##### 📍 Labeled 2D Structural Modification Mirror")
             highlighted_img_html = generate_clean_2d_image(
                 smiles_str=selected_row["Redesigned SMILES"],
@@ -395,7 +389,6 @@ with col_visuals:
                 st.html(highlighted_img_html)
             st.caption(f"**Structural Identification:** Newly introduced **{selected_row['Fragment Added']}** modification group structure layout layout view.")
             
-            # --- PDB COORDINATES EXPORT CONTEXT ---
             variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
             if variant_pdb_string:
                 safe_file_id = str(chosen_variant_id).split()[0].replace("-", "_")
@@ -408,7 +401,6 @@ with col_visuals:
                     key="dl_pdb_variant_btn"
                 )
             
-            # Synthetic Evaluation Panels
             st.write("---")
             st.subheader("🧪 Synthetic Route Evaluation Blueprint")
             
@@ -422,7 +414,6 @@ with col_visuals:
             > * **Target Derivative Dynamic SMILES Identity String:** `{selected_row['Redesigned SMILES']}`
             """)
             
-            # Synthetic FTIR graph generator layout
             st.write("---")
             st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
             
@@ -434,10 +425,11 @@ with col_visuals:
             fragment_peak_effect = peak_intensity * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
             simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
             
+            # FIXED: Encoding safe alphanumeric naming layout variables prevents index matching failures
             chart_df = pd.DataFrame({
-                "Wavenumber (cm⁻³)": wavenumbers,
-                "Transmittance (%)": np.clip(simulated_ftir_profile, 5.0, 100.0)
-            }).set_index("Wavenumber (cm⁻¹)")
+                "Wavenumber": wavenumbers,
+                "Transmittance": np.clip(simulated_ftir_profile, 5.0, 100.0)
+            }).set_index("Wavenumber")
             
             st.line_chart(chart_df, height=220)
             st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
