@@ -161,19 +161,34 @@ def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
         pass
     return None
 
-def scrutiny_optimal_target_atom(smiles_str):
+# --- NEW INTELLIGENT SITE FINDER ---
+def find_valid_cleavage_sites(smiles_str):
+    """Scans the molecule and returns a list of chemically valid Atom Indices for substitution."""
+    valid_sites = []
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
             for atom in mol.GetAtoms():
-                if atom.GetDegree() == 1 and atom.GetSymbol() != 'C':
-                    return atom.GetIdx()
-            for atom in mol.GetAtoms():
-                if atom.GetTotalNumHs() > 0:
-                    return atom.GetIdx()
+                idx = atom.GetIdx()
+                sym = atom.GetSymbol()
+                deg = atom.GetDegree()
+                hs = atom.GetTotalNumHs()
+                
+                # Priority 1: Terminal Heteroatoms (-OH, -NH2, -Cl, etc.)
+                if deg == 1 and sym != 'C':
+                    valid_sites.append({"index": idx, "label": f"Atom #{idx} (Terminal {sym})"})
+                # Priority 2: Carbons with available Hydrogens
+                elif sym == 'C' and hs > 0:
+                    valid_sites.append({"index": idx, "label": f"Atom #{idx} ({sym} with available H)"})
+                # Priority 3: Non-Carbon Heteroatoms with available Hydrogens
+                elif sym in ['N', 'O', 'S'] and hs > 0:
+                    valid_sites.append({"index": idx, "label": f"Atom #{idx} (Core {sym} with available H)"})
+                    
+        # Sort so terminal groups appear first, then by index
+        valid_sites.sort(key=lambda x: (0 if "Terminal" in x["label"] else 1, x["index"]))
     except Exception:
         pass
-    return 0
+    return valid_sites
 
 def get_dynamic_fragments(parent_smiles):
     mol = Chem.MolFromSmiles(parent_smiles)
@@ -230,7 +245,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     for idx, frag in enumerate(fragments):
         try:
             if mechanism_mode == "Co-Crystal / Salt Formulation":
-                # Explicitly force a non-covalent separation
                 derived_smiles = f"{parent_smiles}.{frag['smiles']}"
                 test_mol = Chem.MolFromSmiles(derived_smiles)
                 mw = round(Descriptors.MolWt(test_mol), 2) if test_mol else 0
@@ -248,7 +262,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
                     "FTIR Peak": int(frag["peak"])
                 })
             else:
-                # Force True Covalent Cleavage
                 rw_mol = Chem.RWMol(parent_mol)
                 t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
                 is_terminal = (t_atom.GetDegree() == 1 and t_atom.GetSymbol() != 'C')
@@ -408,22 +421,32 @@ with col_params:
         class_label, _ = get_dynamic_fragments(st.session_state.rd_parent_smiles)
         st.markdown(f"🔬 **AI Classification Profile Isolated:** `{class_label}`")
         
-        # --- NEW UI: REACTION MODE & ATOM INDEX OVERRIDE ---
+        valid_sites = find_valid_cleavage_sites(st.session_state.rd_parent_smiles)
+        
         st.write("##### ⚙️ Synthesis Control Panel")
-        reaction_mode = st.radio(
-            "Select Modification Mechanism:", 
-            ["True Covalent Substitution (Cleavage & Attachment)", "Co-Crystal / Salt Formulation (Non-Covalent)"]
-        )
+        
+        # Check if the molecule is completely locked
+        if len(valid_sites) == 0:
+            st.warning("⚠️ High Steric Hindrance: No valid covalent substitution sites found on this molecule. Enforcing Co-Crystal mode.")
+            reaction_mode = "Co-Crystal / Salt Formulation (Non-Covalent)"
+        else:
+            reaction_mode = st.radio(
+                "Select Modification Mechanism:", 
+                ["True Covalent Substitution (Cleavage & Attachment)", "Co-Crystal / Salt Formulation (Non-Covalent)"]
+            )
         
         show_labels = st.toggle("🔍 Show Atom Index Numbers on Structure", value=True)
         base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles, include_labels=show_labels, zoom_level=600)
         if base_img: st.html(base_img)
-            
-        auto_target = scrutiny_optimal_target_atom(st.session_state.rd_parent_smiles)
         
         if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
-            st.info("💡 Review the structure above and input the exact Atom Index (#) you wish to cleave and modify.")
-            target_idx = st.number_input("🎯 Target Atom Index for Cleavage", min_value=0, value=int(auto_target))
+            st.info("💡 The system has automatically identified chemically legal cleavage sites. Select an atom from the list below.")
+            
+            # --- NEW INTELLIGENT DROPDOWN MENU ---
+            site_options = {site["label"]: site["index"] for site in valid_sites}
+            selected_site_label = st.selectbox("🎯 Select Valid Target Atom for Substitution", options=list(site_options.keys()))
+            target_idx = site_options[selected_site_label]
+            
         else:
             target_idx = 0
             st.info("💡 Co-Crystal mode selected. The functional group will be formulated alongside the parent compound without cleaving bonds.")
@@ -493,18 +516,14 @@ with col_visuals:
                     st.session_state.docking_results = pose_list
             
             if st.session_state.docking_results is not None:
-                # --- HIGH-IMPACT COMPARATIVE DASHBOARD ---
                 st.write("---")
                 st.subheader("📊 Comparative Pose Analysis")
                 
-                # Create a dropdown to select which pose to inspect
                 pose_options = [p["Pose ID"] for p in st.session_state.docking_results]
                 selected_pose_name = st.selectbox("🎯 Select Docking Pose to Inspect", options=pose_options)
                 
-                # Retrieve the data for the selected pose
                 selected_pose_data = next(item for item in st.session_state.docking_results if item["Pose ID"] == selected_pose_name)
                 
-                # Massive Highlighted Metrics UI
                 col_metric_1, col_metric_2 = st.columns(2)
                 with col_metric_1:
                     metric_html_1 = f"""
@@ -528,7 +547,6 @@ with col_visuals:
                     """
                     st.markdown(metric_html_2, unsafe_allow_html=True)
 
-                # --- POSE-SPECIFIC INTERACTIVE 3D VIEWER ---
                 if STMOL_AVAILABLE and st.session_state.rd_receptor:
                     st.write("---")
                     st.subheader(f"🖥️ 3D Protein-Ligand Interaction Viewport ({selected_pose_name})")
@@ -548,7 +566,6 @@ with col_visuals:
                         xyz_view.setStyle({'cartoon': {'color': 'spectrum'}})
                         xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.35, 'color': 'white'})
                         
-                    # Model original ligand
                     parent_pdb_geom = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
                     if parent_pdb_geom:
                         xyz_view.addModel(parent_pdb_geom, "pdb")
@@ -559,7 +576,6 @@ with col_visuals:
                             {'model': 1}
                         )
                         
-                    # Model variant
                     variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
                     if variant_pdb_geom:
                         xyz_view.addModel(variant_pdb_geom, "pdb")
