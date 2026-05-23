@@ -99,6 +99,7 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     
     for frag in fragments:
         try:
+            # Build an explicit single substitution reaction framework mapped to our exact core index
             rxn_smarts = f"([*:1]-[H]).{frag['smiles']}>>[*:1]-[*:2]"
             rxn = AllChem.ReactionFromSmarts(rxn_smarts)
             
@@ -246,6 +247,34 @@ with col_params:
                 except Exception as e:
                     st.error(f"Error reading molecule: {e}")
 
+    # --- ADVANCED DYNAMIC ATOM MUTATION TOOL ---
+    if st.session_state.rd_parent_smiles and st.session_state.ligand_parsed:
+        st.write("---")
+        st.subheader("🛠️ Scaffold Core Substitution Editor")
+        st.markdown("Force-modify an atom's identity to clear valency conflicts or engineer heteroatoms:")
+        
+        col_mut_idx, col_mut_sym = st.columns([1, 1])
+        with col_mut_idx:
+            mutate_idx = st.number_input("Target Atom Index to Mutate:", min_value=0, value=0)
+        with col_mut_sym:
+            new_symbol = st.selectbox("New Element Symbol Identity:", ["C", "N", "O", "S"])
+            
+        if st.button("⚡ Mutate Core Scaffold Element Identity"):
+            try:
+                base_m = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
+                if base_m and mutate_idx < base_m.GetNumAtoms():
+                    rw_m = Chem.RWMol(base_m)
+                    rw_m.GetAtomWithIdx(int(mutate_idx)).SetAtomicNum(Chem.Atom(new_symbol).GetAtomicNum())
+                    mutated_mol = rw_m.GetMol()
+                    Chem.SanitizeMol(mutated_mol)
+                    
+                    st.session_state.rd_parent_smiles = Chem.MolToSmiles(mutated_mol)
+                    st.session_state.rd_ligand = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
+                    st.success(f"Atom #{mutate_idx} successfully converted into {new_symbol}!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Invalid mutation alignment: {e}")
+
     # --- 2D VISUAL MAPPING INTERFACE ---
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
@@ -263,14 +292,14 @@ with col_params:
                 for atom in p_mol.GetAtoms():
                     idx = atom.GetIdx()
                     if atom.GetTotalNumHs() > 0:
-                        color_map[idx] = (0.4, 0.8, 0.4) 
+                        color_map[idx] = (0.4, 0.8, 0.4) # Green for substitutable high efficiency atoms
                     else:
-                        color_map[idx] = (0.9, 0.9, 0.4) 
+                        color_map[idx] = (0.9, 0.9, 0.4) # Yellow for fully saturated quaternary centers
         except Exception:
             pass
             
         if st.session_state.valency_error and st.session_state.error_atom_idx is not None:
-            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) 
+            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) # Hard Red Dot highlight
             
         base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, highlight_dict=color_map, zoom_level=current_zoom_width)
         if base_img:
