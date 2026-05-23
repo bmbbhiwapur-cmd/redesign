@@ -73,7 +73,6 @@ def auto_detect_heteroatom_center(pdb_path):
     return 0.0, 0.0, 0.0
 
 def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose_idx):
-    """Parses REAL pocket residues dynamically from the uploaded PDB file to eliminate fake results."""
     real_residues = []
     if receptor_path and os.path.exists(receptor_path):
         try:
@@ -160,19 +159,12 @@ def generate_clean_2d_image(smiles_str, zoom_level=450):
     return None
 
 def scrutiny_optimal_target_atom(smiles_str):
-    """Locates the absolute best reactive site without crashing."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
-            # 1. Target terminal heavy halogens or OH first (easiest to cleave)
             for atom in mol.GetAtoms():
-                if atom.GetDegree() == 1 and atom.GetSymbol() in ['O', 'N', 'Cl', 'Br', 'F', 'I', 'S']:
+                if atom.GetDegree() == 1 and atom.GetSymbol() != 'C':
                     return atom.GetIdx()
-            # 2. Target any heteroatom with an implicit H
-            for atom in mol.GetAtoms():
-                if atom.GetSymbol() in ['O', 'N', 'S'] and atom.GetTotalNumHs() > 0:
-                    return atom.GetIdx()
-            # 3. Fallback to standard core carbons
             for atom in mol.GetAtoms():
                 if atom.GetTotalNumHs() > 0:
                     return atom.GetIdx()
@@ -194,40 +186,38 @@ def get_dynamic_fragments(parent_smiles):
     if mol.HasSubstructMatch(flavone_smarts) or phenol_count >= 2:
         subclass_title = "Polyphenolic Flavonoid Core"
         fragments = [
-            {"name": "Glucosylation (-C6H11O5)", "smiles": "OC1C(O)C(O)C(O)C(CO)O1", "peak": 3350, "yield": "Moderate Yield (58%)", "route": "Enzymatic glycosylation via Phase II transferase mirroring to maximize water solubility."},
-            {"name": "Prenylation (-CH2CH=C(CH3)2)", "smiles": "CC(C)=CC", "peak": 1660, "yield": "Good Yield (72%)", "route": "Late-stage electrophilic C-alkylation targeting targeted biological membrane permeability."},
-            {"name": "O-Methylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Excellent Yield (91%)", "route": "Selective etherification using Dimethyl Sulfate to enhance metabolic stability windows."},
-            {"name": "Acetylation (-OCOCH3)", "smiles": "OC(=O)C", "peak": 1735, "yield": "Good Yield (84%)", "route": "Esterification utilizing Acetic Anhydride to engineer lipophilic pro-drug behaviors."}
+            {"name": "Glucosylation (-C6H11O5)", "smiles": "OC1C(O)C(O)C(O)C(CO)O1", "peak": 3350, "yield": "Moderate Yield (58%)", "route": "Enzymatic glycosylation via Phase II transferase mirroring."},
+            {"name": "Prenylation (-CH2CH=C(CH3)2)", "smiles": "CC(C)=CC", "peak": 1660, "yield": "Good Yield (72%)", "route": "Late-stage electrophilic C-alkylation."},
+            {"name": "O-Methylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Excellent Yield (91%)", "route": "Selective etherification using Dimethyl Sulfate."},
+            {"name": "Acetylation (-OCOCH3)", "smiles": "OC(=O)C", "peak": 1735, "yield": "Good Yield (84%)", "route": "Esterification utilizing Acetic Anhydride."}
         ]
     elif mol.HasSubstructMatch(alkaloid_smarts):
         subclass_title = "Alkaloidal Nitrogen Heterocycle"
         fragments = [
-            {"name": "N-Alkylation (-CH2CH3)", "smiles": "CC", "peak": 2960, "yield": "Good Yield (80%)", "route": "Nucleophilic substitution at secondary/tertiary nitrogen nodes using Ethyl Bromide."},
-            {"name": "Quaternization (-CH3+)", "smiles": "C", "peak": 2850, "yield": "Excellent Yield (94%)", "route": "Methylation using Methyl Iodide to form stable, water-soluble quaternary ammonium salts."},
-            {"name": "Amidation (-COCH3)", "smiles": "C(=O)C", "peak": 1665, "yield": "Good Yield (78%)", "route": "Amide condensation using Acetyl Chloride to restrict basic nitrogen clearance loops."},
-            {"name": "N-Oxidation (=O)", "smiles": "[O-]", "peak": 950, "yield": "Moderate Yield (65%)", "route": "Controlled oxidation via mCPBA to track active oxygenated amine metabolite signatures."}
+            {"name": "N-Alkylation (-CH2CH3)", "smiles": "CC", "peak": 2960, "yield": "Good Yield (80%)", "route": "Nucleophilic substitution at nitrogen nodes using Ethyl Bromide."},
+            {"name": "Quaternization (-CH3+)", "smiles": "C", "peak": 2850, "yield": "Excellent Yield (94%)", "route": "Methylation using Methyl Iodide."},
+            {"name": "Amidation (-COCH3)", "smiles": "C(=O)C", "peak": 1665, "yield": "Good Yield (78%)", "route": "Amide condensation using Acetyl Chloride."},
+            {"name": "N-Oxidation (=O)", "smiles": "[O-]", "peak": 950, "yield": "Moderate Yield (65%)", "route": "Controlled oxidation via mCPBA."}
         ]
     elif aliphatic_ratio > 0.65:
         subclass_title = "Aliphatic Terpenoid Scaffold"
         fragments = [
-            {"name": "Epoxidation (=O)", "smiles": "O", "peak": 1250, "yield": "Moderate Yield (60%)", "route": "Prilezhaev reaction using mCPBA across isolated alkene bonds to create reactive ring cavities."},
-            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3400, "yield": "Poor Yield (42%)", "route": "Allylic C-H functionalization driven by Selenium Dioxide catalysis vectors."},
-            {"name": "Ozonolysis Fragmentation", "smiles": "O=C", "peak": 1710, "yield": "Good Yield (70%)", "route": "Oxidative cleavage of double bonds to yield lower molecular weight bio-scaffolds."},
+            {"name": "Epoxidation (=O)", "smiles": "O", "peak": 1250, "yield": "Moderate Yield (60%)", "route": "Prilezhaev reaction using mCPBA across isolated alkene bonds."},
+            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3400, "yield": "Poor Yield (42%)", "route": "Allylic C-H functionalization driven by Selenium Dioxide."},
+            {"name": "Ozonolysis Fragmentation", "smiles": "O=C", "peak": 1710, "yield": "Good Yield (70%)", "route": "Oxidative cleavage of double bonds."},
             {"name": "Esterification (-COOCH3)", "smiles": "C(=O)OC", "peak": 1740, "yield": "Good Yield (86%)", "route": "Fischer esterification across terminal carboxylic vectors."}
         ]
     else:
         subclass_title = "Standard Organic Lead Profile"
         fragments = [
-            {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Standard alkylation path via Methyl Iodide parameters."},
-            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H matrix oxidation with copper coordination centers."},
-            {"name": "Amination (-NH2)", "smiles": "N", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled substitution via nucleophilic amination parameters."},
-            {"name": "Fluorination (-F)", "smiles": "F", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor setups."}
+            {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Standard alkylation path via Methyl Iodide."},
+            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H matrix oxidation with copper coordination."},
+            {"name": "Amination (-NH2)", "smiles": "N", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled substitution via nucleophilic amination."},
+            {"name": "Fluorination (-F)", "smiles": "F", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor."}
         ]
     return subclass_title, fragments
 
-# --- INVINCIBLE CLEAVING ENGINE ---
 def run_cleaving_engine(parent_smiles, target_atom_idx):
-    """Bulletproof substitution engine that bypasses SanitizeMol crashes natively."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol: return []
         
@@ -251,7 +241,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
             else:
                 anchor_idx = int(target_atom_idx)
                 
-            # FORCE VALENCY CLEARANCE
             anchor_atom = rw_mol.GetAtomWithIdx(anchor_idx)
             anchor_atom.SetNoImplicit(True)
             anchor_atom.SetNumExplicitHs(0)
@@ -265,16 +254,16 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
             
             res_mol = rw_combo.GetMol()
             
-            # OVERRIDE SANITIZATION TO PREVENT CRASHES ON UPLOADED RINGS
             try:
                 Chem.SanitizeMol(res_mol)
             except Exception:
                 res_mol.UpdatePropertyCache(strict=False)
-                Chem.SanitizeMol(res_mol, Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES ^ Chem.SanitizeFlags.SANITIZE_VALENCE)
+                Chem.SanitizeMol(
+                    res_mol, 
+                    Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES ^ Chem.SanitizeFlags.SANITIZE_VALENCE
+                )
                 
             derived_smiles = Chem.MolToSmiles(res_mol)
-            
-            # Final integrity check
             test_mol = Chem.MolFromSmiles(derived_smiles)
             if not test_mol: raise ValueError("Integrity fail")
                 
@@ -295,7 +284,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
         except Exception:
             continue
             
-    # ABSOLUTE FALLBACK: IF GRAPH MATH FAILS, GENERATE CO-CRYSTAL FORMULATIONS INSTEAD OF CRASHING
     if len(derived_library) == 0:
         for idx, frag in enumerate(fragments):
             derived_smiles = f"{parent_smiles}.{frag['smiles']}"
@@ -415,13 +403,13 @@ with col_params:
         
         class_label, _ = get_dynamic_fragments(st.session_state.rd_parent_smiles)
         st.markdown(f"🔬 **AI Classification Profile Isolated:** `{class_label}`")
-        st.markdown("**AI Scaffold Scrutiny Active:** Customizing chemical substitution matrices to match this structural class...")
+        st.markdown("**AI Scaffold Scrutiny Active:** Customizing chemical substitution matrices...")
         
         base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles)
         if base_img: st.html(base_img)
             
         scrutinized_vector = scrutiny_optimal_target_atom(st.session_state.rd_parent_smiles)
-        st.info("💡 Scaffold Scrutiny complete. Molecular cleavage vectors locked onto the primary target subclass coordinates.")
+        st.info("💡 Scaffold Scrutiny complete. Molecular cleavage vectors locked.")
 
         if st.button("🚀 Start Positive Array", type="primary"):
             st.session_state.docking_results = None 
@@ -459,7 +447,6 @@ with col_visuals:
             
             st.markdown("##### 📋 Copy-Paste Target Redesign String Package")
             st.code(f"{str(selected_row['Redesigned SMILES'])}", language="text")
-            st.caption("Click the copy icon on the right side of the code window above to extract the clean redesign SMILES string configuration.")
             
             st.write("---")
             st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
@@ -471,31 +458,40 @@ with col_visuals:
             chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
             st.line_chart(chart_df, height=220)
             
+            # --- WRAP-SAFE TEXT RENDERING TO PREVENT SYNTAX/TRUNCATION ERRORS ---
             clean_frag_string = str(selected_row['Fragment Added'])
             clean_peak_integer = int(target_peak)
-            st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{clean_frag_string}</b> modification around <b>{clean_peak_integer} cm⁻¹</b>.</p>", unsafe_allow_html=True)
+            caption_html = (
+                f"<p style='text-align:center; font-size:12px; color:#666;'>"
+                f"Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the "
+                f"<b>{clean_frag_string}</b> modification around <b>{clean_peak_integer} cm⁻¹</b>.</p>"
+            )
+            st.markdown(caption_html, unsafe_allow_html=True)
 
-            # --- MULTI-POSE COMPARATIVE DOCKING CORE INTERFACE ---
             st.write("---")
             st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
-            st.markdown("Run 5-pose unconstrained thermodynamic sampling matching the initial parent molecule directly against the modified candidate configuration:")
+            st.markdown("Run 5-pose unconstrained thermodynamic sampling.")
             
             det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
-            st.info(f"**Auto-Grid Locked Coordinates:** X: `{det_x}` | Y: `{det_y}` | Z: `{det_z}` (Resolution: 22Å³ bounding parameter space)")
+            st.info(f"**Auto-Grid Locked Coordinates:** X: `{det_x}` | Y: `{det_y}` | Z: `{det_z}`")
 
             if st.button("🚀 Run 5-Pose Thermodynamic Docking Core", type="secondary", use_container_width=True):
-                with st.spinner("Processing thermodynamic docking arrays across 5 unique poses..."):
+                with st.spinner("Processing thermodynamic docking arrays..."):
                     pose_list = []
                     for p in range(5):
-                        p_score, p_res, p_bond = run_true_vina_docking_pose(str(selected_row["Redesigned SMILES"]), st.session_state.rd_receptor, det_x, det_y, det_z, 22, p)
-                        orig_score, _, _ = run_true_vina_docking_pose(st.session_state.rd_parent_smiles, st.session_state.rd_receptor, det_x, det_y, det_z, 22, p)
+                        p_score, p_res, p_bond = run_true_vina_docking_pose(
+                            str(selected_row["Redesigned SMILES"]), st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
+                        )
+                        orig_score, _, _ = run_true_vina_docking_pose(
+                            st.session_state.rd_parent_smiles, st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
+                        )
                         
                         pose_list.append({
-                            "Pose Ranked Mode": f"Conformation Alignment Pose #{p+1}",
-                            "Parent Energy (kcal/mol)": round(orig_score + 0.35, 2),
-                            "Variant Energy (kcal/mol)": p_score,
-                            "Target Residue Anchor Site": p_res,
-                            "Bonding Class Identified": p_bond
+                            "Pose Ranked Mode": f"Pose #{p+1}",
+                            "Parent Energy": round(orig_score + 0.35, 2),
+                            "Variant Energy": p_score,
+                            "Target Residue Anchor": p_res,
+                            "Bonding Class": p_bond
                         })
                     st.session_state.docking_results = pd.DataFrame(pose_list)
             
@@ -503,7 +499,6 @@ with col_visuals:
                 st.markdown("#### 📊 Comparative Multi-Pose Free Energy Report Card")
                 st.dataframe(st.session_state.docking_results, hide_index=True, use_container_width=True)
                 
-                # --- INTERACTIVE py3Dmol VIEWER MATRIX PANEL ---
                 if STMOL_AVAILABLE and st.session_state.rd_receptor:
                     st.write("---")
                     st.subheader("🖥️ 3D Protein-Ligand Interaction Viewer Canvas")
@@ -527,10 +522,25 @@ with col_visuals:
                     if parent_pdb_geom:
                         xyz_view.addModel(parent_pdb_geom, "pdb")
                         xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.22}})
-                        xyz_view.addLabel("Original Ligand", {'fontColor':'white', 'backgroundColor': 'black', 'backgroundOpacity': 0.6}, {'model': 1})
+                        xyz_view.addLabel(
+                            "Original Ligand",
+                            {'fontColor':'white', 'backgroundColor': 'black', 'backgroundOpacity': 0.6},
+                            {'model': 1}
+                        )
                         
                     variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
                     if variant_pdb_geom:
                         xyz_view.addModel(variant_pdb_geom, "pdb")
                         xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
-                        xyz_view.addLabel(f"Redesign variant: {str(selected_row['Variant ID'])}", {'fontColor':'green', 'backgroundColor': 'white', 'background
+                        
+                        # --- WRAP-SAFE DICTIONARY LABEL TO PREVENT UNTERMINATED STRING ERRORS ---
+                        label_string = f"Redesign variant: {str(selected_row['Variant ID'])}"
+                        label_styles = {'fontColor':'green', 'backgroundColor': 'white', 'backgroundOpacity': 0.8}
+                        label_model = {'model': 2}
+                        xyz_view.addLabel(label_string, label_styles, label_model)
+                        
+                    xyz_view.zoomTo()
+                    showmol(xyz_view, height=500, width=700)
+                        
+    else:
+        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
