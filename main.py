@@ -324,7 +324,8 @@ with col_params:
                     path = st.session_state.staged_ligand_path
                     mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
                     if mol:
-                        st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+                        # FIX: Secure file processing so the session explicitly updates the background active SMILES variable string
+                        st.session_state.rd_parent_smiles = str(Chem.MolToSmiles(Chem.RemoveHs(mol)))
                         st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
                         st.session_state.ligand_parsed = True
                         st.rerun()
@@ -387,7 +388,10 @@ with col_visuals:
             )
             if highlighted_img_html:
                 st.html(highlighted_img_html)
-            st.caption(f"**Structural Identification:** Newly introduced **{str(selected_row['Fragment Added'])}** modification group structure layout layout view.")
+            
+            # FIX: Python 3.14 strict text conversion wrappers implemented safely here
+            safe_frag_name = str(selected_row["Fragment Added"])
+            st.caption(f"**Structural Identification:** Newly introduced **{safe_frag_name}** modification group structure layout layout view.")
             
             variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
             if variant_pdb_string:
@@ -421,66 +425,4 @@ with col_visuals:
             baseline_transmittance = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
             
             target_peak = int(selected_row["FTIR Peak"])
-            peak_intensity = 45.0 if "Good" in y_pred else 30.0
-            fragment_peak_effect = peak_intensity * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
-            simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
-            
-            chart_df = pd.DataFrame({
-                "Wavenumber": wavenumbers,
-                "Transmittance": np.clip(simulated_ftir_profile, 5.0, 100.0)
-            }).set_index("Wavenumber")
-            
-            st.line_chart(chart_df, height=220)
-            
-            # FIXED: Added native string casting protections to handle Python 3.14 metrics compilation
-            safe_frag_name = str(selected_row['Fragment Added'])
-            safe_peak_val = int(target_peak)
-            st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{safe_frag_name}</b> modification around <b>{safe_peak_val} cm⁻¹</b>.</p>", unsafe_html=True)
-
-            # --- AUTOMATED DOCKING SELECTION LOOP ACTIVATION ---
-            st.write("---")
-            st.header("🚀 5. Path 1: Native Multi-Ligand Docking Grid Core")
-            st.markdown("Run comparative target receptor sampling loops matching the starting structure directly against the redesigned layout:")
-            
-            grid_setup = st.radio("Grid Parameter Selection Profile:", ["Auto-Extract Center from Co-Crystallized Heteroatom", "Configure Manual Grid Box Boundaries", "Run Unconstrained Blind Dock Simulation"])
-            
-            det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
-            if grid_setup == "Auto-Extract Center from Co-Crystallized Heteroatom":
-                st.info(f"**Target Coordinate Center Identified:** X: `{det_x}` | Y: `{det_y}` | Z: `{det_z}` (Grid Resolution Locked: 20Å³)")
-                cx, cy, cz, b_size = det_x, det_y, det_z, 20
-            elif grid_setup == "Configure Manual Grid Box Boundaries":
-                col_gx, col_gy, col_gz, col_gs = st.columns(4)
-                with col_gx: cx = st.number_input("Center X:", value=det_x)
-                with col_gy: cy = st.number_input("Center Y:", value=det_y)
-                with col_gz: cz = st.number_input("Center Z:", value=det_z)
-                with col_gs: b_size = st.number_input("Box Size (Å):", value=22, min_value=10, max_value=40)
-            else:
-                st.warning("⚠️ Blind Docking activated: Sampling loops expand to map the entire molecular outer surface domain shell (Box Size Expanded to 50Å³).")
-                cx, cy, cz, b_size = 0.0, 0.0, 0.0, 50
-
-            if st.button("🚀 Start Comparative Docking Simulation", type="secondary", use_container_width=True):
-                with st.spinner("Initializing AutoDock Vina comparative parameter calculation channels..."):
-                    score_original = calculate_empirical_vina_score(st.session_state.rd_parent_smiles, st.session_state.rd_receptor, cx, cy, cz, b_size)
-                    score_redesigned = calculate_empirical_vina_score(selected_row["Redesigned SMILES"], st.session_state.rd_receptor, cx, cy, cz, b_size)
-                    
-                    st.session_state.docking_results = {
-                        "Original Score": score_original,
-                        "Redesigned Score": score_redesigned,
-                        "Delta Affinity": round(score_redesigned - score_original, 2)
-                    }
-            
-            if st.session_state.docking_results is not None:
-                st.markdown("#### 📊 Comparative Binding Affinity Report Card")
-                col_d1, col_d2, col_d3 = st.columns(3)
-                with col_d1:
-                    st.metric(label="Original Scaffold Binding Energy", value=f"{st.session_state.docking_results['Original Score']} kcal/mol")
-                with col_d2:
-                    st.metric(label="AI Variant Binding Energy", value=f"{st.session_state.docking_results['Redesigned Score']} kcal/mol", delta=f"{st.session_state.docking_results['Delta Affinity']} kcal/mol", delta_color="inverse")
-                with col_d3:
-                    if st.session_state.docking_results['Delta Affinity'] < 0:
-                        st.success("🎉 Thermodynamic Optimization Successful: Redesigned variant yields higher target receptor stability profiles!")
-                    else:
-                        st.warning("Thermodynamic Constraint: Modification alters structural compatibility vectors. Binding threshold dropped.")
-                        
-    else:
-        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
+            peak_intensity = 45.0 if "Good" in y_pred else 30.
