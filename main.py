@@ -77,7 +77,7 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
         
     target_atom = parent_mol.GetAtomWithIdx(int(target_atom_idx))
     
-    # Valency Block Gate: If an atom has zero hydrogens available, crash cleanly to fire the UI warning
+    # Valency Block Gate: If an atom has zero hydrogens available, trigger the UI error state cleanly
     if (target_atom.GetTotalNumHs() == 0):
         return []
 
@@ -99,11 +99,9 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     
     for frag in fragments:
         try:
-            # Build an explicit single substitution reaction framework mapped to our exact core index
             rxn_smarts = f"([*:1]-[H]).{frag['smiles']}>>[*:1]-[*:2]"
             rxn = AllChem.ReactionFromSmarts(rxn_smarts)
             
-            # Map inputs inside the structural forward pass container execution
             products = rxn.RunReactants((parent_mol, Chem.MolFromSmiles(frag["smiles"])))
             if not products or len(products) == 0:
                 continue
@@ -116,7 +114,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             if not test_mol:
                 continue
                 
-            # Verify the 2D mirror image generation works smoothly before adding it to the table array
             test_img = generate_labeled_2d_image(derived_smiles, highlight_dict={int(target_atom_idx): (0.4, 0.9, 0.4)})
             if not test_img:
                 continue
@@ -125,7 +122,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             logp = round(Descriptors.MolLogP(test_mol), 2)
             simulated_score = round(0.95 - (rank_counter * 0.02) - (abs(logp) * 0.01), 2)
             
-            # Identify the absolute coordinates tracking of the added modification cluster cleanly
             added_indices = [a.GetIdx() for a in test_mol.GetAtoms() if a.GetIdx() >= num_atoms]
             if not added_indices:
                 added_indices = [int(target_atom_idx)]
@@ -267,14 +263,14 @@ with col_params:
                 for atom in p_mol.GetAtoms():
                     idx = atom.GetIdx()
                     if atom.GetTotalNumHs() > 0:
-                        color_map[idx] = (0.4, 0.8, 0.4) # Green for substitutable high efficiency atoms
+                        color_map[idx] = (0.4, 0.8, 0.4) 
                     else:
-                        color_map[idx] = (0.9, 0.9, 0.4) # Yellow for fully saturated quaternary centers
+                        color_map[idx] = (0.9, 0.9, 0.4) 
         except Exception:
             pass
             
         if st.session_state.valency_error and st.session_state.error_atom_idx is not None:
-            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) # Hard Red Dot highlight
+            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) 
             
         base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, highlight_dict=color_map, zoom_level=current_zoom_width)
         if base_img:
@@ -291,7 +287,6 @@ with col_params:
         except Exception:
             atom_vector = 0
 
-        # RENAME MECHANICS Site: Triggers strict dynamic substitution reaction algorithm tracking
         if st.button("🚀 Start Positive Array", type="primary"):
             st.session_state.valency_error = False
             with st.spinner("Processing optimization transformations..."):
@@ -377,3 +372,12 @@ with col_visuals:
             simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
             
             chart_df = pd.DataFrame({
+                "Wavenumber (cm⁻¹)": wavenumbers,
+                "Transmittance (%)": np.clip(simulated_ftir_profile, 5.0, 100.0)
+            }).set_index("Wavenumber (cm⁻¹)")
+            
+            st.line_chart(chart_df, height=220)
+            st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
+            
+    else:
+        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
