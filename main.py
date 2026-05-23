@@ -4,8 +4,10 @@ import urllib.request
 import re
 import numpy as np
 import pandas as pd
+import base64
+import io
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors
+from rdkit.Chem import AllChem, Descriptors, Draw
 
 # --- BIOINFORMATICS STRUCTURAL ENGINE ---
 
@@ -38,11 +40,27 @@ def generate_pdb_string_from_smiles(smiles_str):
         pass
     return None
 
+def generate_labeled_2d_image(smiles_str):
+    """Generates a 2D image of the molecule where each atom is labeled with its index mapping."""
+    try:
+        mol = Chem.MolFromSmiles(smiles_str)
+        if mol:
+            mol_to_draw = Chem.Mol(mol)
+            for atom in mol_to_draw.GetAtoms():
+                # Display atom symbol alongside its user index
+                atom.SetProp('atomNote', f"#{atom.GetIdx()}")
+            
+            img = Draw.MolToImage(mol_to_draw, size=(450, 350), legend="Locate your target position number below:")
+            buffered = io.BytesIO()
+            img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom:15px;"/>'
+    except Exception:
+        pass
+    return "<p style='color:red;'>Visual mapping error.</p>"
+
 def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
-    """
-    Uses RDKit to programmatically attach 10 distinct, chemically valid 
-    functional groups to the user-selected atom index of the parent scaffold.
-    """
+    """Programmatically attaches 10 distinct functional groups to the selected atom position."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol:
         return []
@@ -113,8 +131,7 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
                 "FTIR Peak": frag["peak"]
             })
             
-    derived_library = sorted(derived_library, key=lambda x: x["Delta Score"], reverse=True)
-    return pd.DataFrame(derived_library)
+    return sorted(derived_library, key=lambda x: x["Delta Score"], reverse=True)
 
 def render_comparison_viewport(parent_pdb, variant_pdb):
     """Uses 3Dmol.js to display a dual side-by-side interactive canvas comparing modifications."""
@@ -167,8 +184,12 @@ st.markdown("""
 # Initialize state trackers safely
 if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
-if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = ""
+if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = "CC(=O)NC1=CC=C(O)C=C1" # Default Acetaminophen
 if "rd_library" not in st.session_state: st.session_state.rd_library = None
+
+# Ensure starting structure ligand generation is bootstrapped
+if st.session_state.rd_ligand is None:
+    st.session_state.rd_ligand = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
 
 # --- MASTER ENVIRONMENT RESET ACTIONS ---
 if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
@@ -210,7 +231,7 @@ with col_params:
     ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
     
     if ligand_mode == "Paste SMILES String":
-        smiles_input = st.text_input("Parent Compound SMILES", value="CC(=O)NC1=CC=C(O)C=C1").strip()
+        smiles_input = st.text_input("Parent Compound SMILES", value=st.session_state.rd_parent_smiles).strip()
         if st.button("🔧 Generate Conformer Matrix"):
             if smiles_input:
                 st.session_state.rd_parent_smiles = smiles_input
@@ -221,57 +242,49 @@ with col_params:
         uploaded_lig = st.file_uploader("Upload Molecule Block (.PDB, .SDF)", type=["pdb", "sdf"])
         if uploaded_lig:
             path = f"rd_lig_{uploaded_lig.name}"
-            if st.session_state.rd_parent_smiles != path:
-                with open(path, "wb") as f:
-                    f.write(uploaded_lig.getbuffer())
-                try:
-                    mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
-                    if mol:
-                        st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
-                        st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
-                        st.success("Lead file coordinates saved.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error reading molecule: {e}")
-
-    # --- USER-FRIENDLY POSITION MAPPING SYSTEM ---
-    if st.session_state.rd_ligand is not None:
-        st.write("---")
-        st.header("3. Generative Growth Position")
-        st.markdown("Select the specific chemical region of your molecule you want the AI to redesign:")
-
-        # Check if the default Acetaminophen structure is active to present clean descriptive tags
-        is_default = "CC(=O)NC1=CC=C(O)C=C1" in st.session_state.rd_parent_smiles
-        
-        if is_default:
-            position_options = {
-                "Aromatic Ring: Position C-2 (Ortho to Hydroxyl)": 0,
-                "Aromatic Ring: Position C-3 (Meta to Hydroxyl)": 1,
-                "Phenolic Group: Oxygen Center (-OH root)": 4,
-                "Amide Group: Nitrogen Center (-NH- bridge)": 7,
-                "Carbonyl Link: Carbon Center (C=O)": 5,
-                "Aliphatic Tail: Terminal Methyl Carbon (-CH3)": 6
-            }
-        else:
+            with open(path, "wb") as f:
+                f.write(uploaded_lig.getbuffer())
             try:
-                parent_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
-                total_atoms = parent_mol.GetNumAtoms() if parent_mol else 10
-                position_options = {f"Atom Position Index #{i} ({parent_mol.GetAtomWithIdx(i).GetSymbol() if parent_mol else 'C'})": i for i in range(total_atoms)}
-            except Exception:
-                position_options = {"Default Structural Root Location": 0}
+                mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
+                if mol:
+                    st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+                    st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
+                    st.success("Lead file coordinates saved.")
+                    st.cleanup()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error reading molecule: {e}")
 
-        selected_label = st.selectbox(
-            "Target Modification Region:", 
-            options=list(position_options.keys())
-        )
+    # --- 2D VISUAL MAPPING INTERFACE ---
+    if st.session_state.rd_parent_smiles:
+        st.write("---")
+        st.header("3. Clickable 2D Structural Map")
+        st.markdown("Look at the map below to choose which atom branch position you want to optimize:")
         
-        atom_vector = position_options[selected_label]
+        # Draw the dynamic labeled structure directly onto the form layout panel
+        img_html = generate_labeled_2d_image(st.session_state.rd_parent_smiles)
+        st.html(img_html)
         
+        try:
+            p_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
+            max_atoms = p_mol.GetNumAtoms() if p_mol else 10
+            
+            # Simple, clear selection grid
+            atom_choices = []
+            for idx in range(max_atoms):
+                sym = p_mol.GetAtomWithIdx(idx).GetSymbol()
+                atom_choices.append(f"Atom Position #{idx} (Element: {sym})")
+                
+            selected_atom_label = st.selectbox("Select target position from the image map above:", options=atom_choices)
+            atom_vector = int(selected_atom_label.split("#")[1].split()[0])
+        except Exception:
+            atom_vector = st.number_input("Target Position Number:", min_value=0, value=0)
+
         can_run = bool(st.session_state.rd_receptor and st.session_state.rd_ligand)
         if st.button("🚀 Execute 10-Pose Redesign Optimization Array", type="primary", disabled=not can_run):
             with st.spinner("Processing deep optimization forward layers..."):
                 results_df = generate_dynamic_derivatives(st.session_state.rd_parent_smiles, atom_vector)
-                st.session_state.rd_library = results_df
+                st.session_state.rd_library = pd.DataFrame(results_df)
                 st.rerun()
 
 with col_visuals:
@@ -289,7 +302,6 @@ with col_visuals:
         chosen_variant_id = st.selectbox("Isolate variant to map properties:", options=st.session_state.rd_library["Variant ID"])
         
         selected_row = st.session_state.rd_library[st.session_state.rd_library["Variant ID"] == chosen_variant_id].iloc[0]
-        
         variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
         
         if variant_pdb_string and st.session_state.rd_ligand:
@@ -328,18 +340,4 @@ with col_visuals:
         wavenumbers = np.linspace(400, 4000, 500)
         baseline_transmittance = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
         
-        target_peak = int(selected_row["FTIR Peak"])
-        peak_intensity = 45.0 if "Good" in y_pred else 30.0
-        fragment_peak_effect = peak_intensity * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
-        simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
-        
-        chart_df = pd.DataFrame({
-            "Wavenumber (cm⁻¹)": wavenumbers,
-            "Transmittance (%)": np.clip(simulated_ftir_profile, 5.0, 100.0)
-        }).set_index("Wavenumber (cm⁻¹)")
-        
-        st.line_chart(chart_df, height=220)
-        st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
-        
-    else:
-        st.info("Awaiting execution pipeline loops to display generative structural visualization models...")
+        target_peak = int(
