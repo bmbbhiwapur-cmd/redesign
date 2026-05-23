@@ -113,7 +113,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             fallback_smiles = f"{frag['smiles']}{parent_smiles}".replace("==", "=")
             try:
                 f_mol = Chem.MolFromSmiles(fallback_smiles)
-                # FIX: Fully closed expression layouts with solid inline defaults
                 mw = round(Descriptors.MolWt(f_mol), 2) if f_mol else 150.0
                 logp = round(Descriptors.MolLogP(f_mol), 2) if f_mol else 1.5
             except Exception:
@@ -181,13 +180,14 @@ st.markdown("""
 **InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India | Contact: sarangresearch@gmail.com
 """)
 
-# Initialize state trackers safely
+# Initialize background caching states safely
 if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
 if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = "CC(=O)NC1=CC=C(O)C=C1" 
 if "rd_library" not in st.session_state: st.session_state.rd_library = None
 
-if st.session_state.rd_ligand is None:
+# Fallback bootstrap logic to guarantee active base matrices
+if st.session_state.rd_ligand is None and st.session_state.rd_parent_smiles:
     st.session_state.rd_ligand = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
 
 # --- MASTER ENVIRONMENT RESET ACTIONS ---
@@ -241,18 +241,17 @@ with col_params:
         uploaded_lig = st.file_uploader("Upload Molecule Block (.PDB, .SDF)", type=["pdb", "sdf"])
         if uploaded_lig:
             path = f"rd_lig_{uploaded_lig.name}"
-            if st.session_state.rd_parent_smiles != path:
-                with open(path, "wb") as f:
-                    f.write(uploaded_lig.getbuffer())
-                try:
-                    mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
-                    if mol:
-                        st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
-                        st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
-                        st.success("Lead file coordinates saved.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error reading molecule: {e}")
+            with open(path, "wb") as f:
+                f.write(uploaded_lig.getbuffer())
+            try:
+                mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
+                if mol:
+                    st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+                    st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
+                    st.success("Lead file coordinates saved.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error reading molecule: {e}")
 
     # --- 2D VISUAL MAPPING INTERFACE ---
     if st.session_state.rd_parent_smiles:
@@ -275,9 +274,12 @@ with col_params:
             selected_atom_label = st.selectbox("Select target position from the image map above:", options=atom_choices)
             atom_vector = int(selected_atom_label.split("#")[1].split()[0])
         except Exception:
-            atom_vector = st.number_input("Target Position Number:", min_value=0, value=0)
+            atom_vector = 0
 
-        can_run = bool(st.session_state.rd_receptor and st.session_state.rd_ligand)
+        # REINFORCED EXECUTION FLAGS: If no receptor protein is loaded yet, 
+        # it fallback-allows screening analytics generation directly on the small-molecule matrix
+        can_run = bool(st.session_state.rd_ligand is not None)
+        
         if st.button("🚀 Execute 10-Pose Redesign Optimization Array", type="primary", disabled=not can_run):
             with st.spinner("Processing deep optimization forward layers..."):
                 results_df = generate_dynamic_derivatives(st.session_state.rd_parent_smiles, atom_vector)
