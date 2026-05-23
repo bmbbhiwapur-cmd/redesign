@@ -40,8 +40,8 @@ def generate_pdb_string_from_smiles(smiles_str):
         pass
     return None
 
-def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Locate your target position number below:"):
-    """Generates a 2D image of the molecule with labeled indices and optional functional group highlighting."""
+def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Locate your target position number below:", zoom_level=450):
+    """Generates a 2D image of the molecule with labeled indices, custom dimensions, and optional highlighting."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
@@ -49,13 +49,13 @@ def generate_labeled_2d_image(smiles_str, highlight_atoms=None, legend_text="Loc
             for atom in mol_to_draw.GetAtoms():
                 atom.SetProp('atomNote', f"#{atom.GetIdx()}")
             
-            # Setup neon visualization parameters if sub-fragment highlighting array indices exist
             kwargs = {}
             if highlight_atoms is not None:
                 kwargs['highlightAtoms'] = highlight_atoms
-                kwargs['highlightColor'] = (0.4, 0.9, 0.4) # Bright soft green functional group ring trace
+                kwargs['highlightColor'] = (0.4, 0.9, 0.4)
             
-            img = Draw.MolToImage(mol_to_draw, size=(450, 350), legend=legend_text, **kwargs)
+            # Use dynamic dimensions to control zoom layout presentation rules
+            img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)), legend=legend_text, **kwargs)
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
             img_str = base64.b64encode(buffered.getvalue()).decode()
@@ -104,7 +104,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             logp = round(Descriptors.MolLogP(derived_mol), 2)
             simulated_score = round(0.95 - (idx * 0.03) - (abs(logp) * 0.01), 2)
             
-            # Map tracking array index positions of newly introduced fragment atoms for visualization rendering
             added_indices = list(range(num_atoms, derived_mol.GetNumAtoms()))
             
             derived_library.append({
@@ -184,6 +183,7 @@ def render_comparison_viewport(parent_pdb, variant_pdb):
     """
     components.html(html_content, height=350)
 
+
 # --- APPLICATION SETUP ---
 st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
 st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
@@ -194,11 +194,13 @@ st.markdown("""
 # Initialize state trackers safely
 if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
-if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = "CC(=O)NC1=CC=C(O)C=C1" 
+if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
 if "rd_library" not in st.session_state: st.session_state.rd_library = None
 
-if st.session_state.rd_ligand is None:
-    st.session_state.rd_ligand = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
+# Gated stage variables to track explicitly clicked actions
+if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
+if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
+if "zoom_enabled" not in st.session_state: st.session_state.zoom_enabled = False
 
 # --- MASTER ENVIRONMENT RESET ACTIONS ---
 if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
@@ -212,21 +214,22 @@ col_params, col_visuals = st.columns([1, 1])
 with col_params:
     st.header("1. Target Protein Grid Matrix")
     
-    # High-visibility matrix structural alignment check banner
-    if st.session_state.rd_receptor:
+    # Render validation status text ONLY based on explicit processing action criteria
+    if st.session_state.protein_parsed and st.session_state.rd_receptor:
         st.success("🟢 Target Protein Matrix Ready for Operations")
     else:
-        st.error("🔴 Matrix Vector Alert: Target protein structure has not been initialized yet.")
+        st.error("🔴 Matrix Vector Alert: Target protein structure has not been parsed yet.")
         
     protein_mode = st.radio("Protein Input Setup:", ["Download PDB ID", "Upload Local Structure File"])
     
     if protein_mode == "Download PDB ID":
         pdb_id = st.text_input("Enter 4-Letter PDB Code", value="2AMB").strip()
-        if st.button("📥 Parse Target Vector"):
+        if st.button("📥 Parse Target Vector", key="btn_parse_protein"):
             if pdb_id:
                 ok, path = fetch_pdb_from_rcsb(pdb_id)
                 if ok:
                     st.session_state.rd_receptor = path
+                    st.session_state.protein_parsed = True
                     st.rerun()
                 else:
                     st.error(path)
@@ -234,154 +237,16 @@ with col_params:
         uploaded_rec = st.file_uploader("Upload Macromolecule PDB", type=["pdb"])
         if uploaded_rec:
             path = f"rd_rec_{uploaded_rec.name}"
-            if st.session_state.rd_receptor != path:
+            # Let the parse target vector button trigger the file storage sequence cleanly
+            if st.button("📥 Parse Target Vector from File", key="btn_parse_file_protein"):
                 with open(path, "wb") as f:
                     f.write(uploaded_rec.getbuffer())
                 st.session_state.rd_receptor = path
+                st.session_state.protein_parsed = True
                 st.rerun()
 
     st.write("---")
     st.header("2. Phytochemical Scaffold Profile")
     
-    # High-visibility ligand structural validation banner
-    if st.session_state.rd_ligand:
+    if st.session_state.ligand_parsed and st.session_state.rd_ligand:
         st.success("🟢 Phytochemical Lead Scaffold Coordinates Ready")
-    else:
-        st.error("🔴 Scaffold Coordinate Alert: Small molecule ligand input coordinates missing.")
-        
-    ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
-    
-    if ligand_mode == "Paste SMILES String":
-        smiles_input = st.text_input("Parent Compound SMILES", value=st.session_state.rd_parent_smiles).strip()
-        if st.button("🔧 Generate Conformer Matrix"):
-            if smiles_input:
-                st.session_state.rd_parent_smiles = smiles_input
-                st.session_state.rd_ligand = generate_pdb_string_from_smiles(smiles_input)
-                st.rerun()
-    else:
-        uploaded_lig = st.file_uploader("Upload Molecule Block (.PDB, .SDF)", type=["pdb", "sdf"])
-        if uploaded_lig:
-            path = f"rd_lig_{uploaded_lig.name}"
-            if st.session_state.rd_parent_smiles != path:
-                with open(path, "wb") as f:
-                    f.write(uploaded_lig.getbuffer())
-                try:
-                    mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
-                    if mol:
-                        st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
-                        st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error reading molecule: {e}")
-
-    # --- 2D VISUAL MAPPING INTERFACE ---
-    if st.session_state.rd_parent_smiles:
-        st.write("---")
-        st.header("3. Clickable 2D Structural Map")
-        st.markdown("Look at the map below to choose which atom branch position you want to optimize:")
-        
-        img_html = generate_labeled_2d_image(st.session_state.rd_parent_smiles)
-        st.html(img_html)
-        
-        try:
-            p_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
-            max_atoms = p_mol.GetNumAtoms() if p_mol else 10
-            
-            atom_choices = []
-            for idx in range(max_atoms):
-                sym = p_mol.GetAtomWithIdx(idx).GetSymbol()
-                atom_choices.append(f"Atom Position #{idx} (Element: {sym})")
-                
-            selected_atom_label = st.selectbox("Select target position from the image map above:", options=atom_choices)
-            atom_vector = int(selected_atom_label.split("#")[1].split()[0])
-        except Exception:
-            atom_vector = 0
-
-        can_run = bool(st.session_state.rd_ligand is not None)
-        if st.button("🚀 Execute 10-Pose Redesign Optimization Array", type="primary", disabled=not can_run):
-            with st.spinner("Processing deep optimization forward layers..."):
-                results_df = generate_dynamic_derivatives(st.session_state.rd_parent_smiles, atom_vector)
-                st.session_state.rd_library = results_df
-                st.rerun()
-
-with col_visuals:
-    st.header("4. Screening Array & Workspace Viewport")
-    
-    if st.session_state.rd_library is not None:
-        st.markdown("### 🏆 Enhancing Properties Ranking Matrix (Sorted by Score)")
-        st.dataframe(
-            st.session_state.rd_library[["Variant ID", "Fragment Added", "Redesigned SMILES", "Delta Score", "MW (g/mol)", "LogP"]],
-            hide_index=True, use_container_width=True
-        )
-        
-        st.write("---")
-        st.subheader("🔍 Selection Isolation & 2D/3D Topography Mirror")
-        chosen_variant_id = st.selectbox("Isolate variant to map structural modifications:", options=st.session_state.rd_library["Variant ID"])
-        
-        # Pull records directly matching the full structural index identifier
-        selected_row = st.session_state.rd_library[st.session_state.rd_library["Variant ID"] == chosen_variant_id].iloc[0]
-        
-        # --- NEW 2D TOPOGRAPHY HIGHLIGHT MIRROR ---
-        st.markdown("##### 📍 Labeled 2D Structural Modification Mirror")
-        highlighted_img_html = generate_labeled_2d_image(
-            smiles_str=selected_row["Redesigned SMILES"],
-            highlight_atoms=selected_row["Highlight Atoms"],
-            legend_text=f"Highlighted Region indicates newly introduced {selected_row['Fragment Added']} group geometry."
-        )
-        st.html(highlighted_img_html)
-        
-        # --- 3D TOPOGRAPHY VIEWPORT ---
-        st.markdown("##### 🧬 Co-Crystallized 3D Conformational Space")
-        variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
-        
-        if variant_pdb_string and st.session_state.rd_ligand:
-            render_comparison_viewport(st.session_state.rd_ligand, variant_pdb_string)
-            
-            safe_file_id = str(chosen_variant_id).split()[0].replace("-", "_")
-            st.download_button(
-                label=f"📥 Download {chosen_variant_id.split()[0]} Coordinates (.PDB)",
-                data=variant_pdb_string,
-                file_name=f"redesign_{safe_file_id}.pdb",
-                mime="text/plain",
-                use_container_width=True,
-                key="dl_pdb_variant_btn"
-            )
-        else:
-            st.error("⚠️ Geometry Generation Error: Conformer embedding constraints hit. Try another variant.")
-        
-        # Synthetic Evaluation Panels
-        st.write("---")
-        st.subheader("🧪 Synthetic Route Evaluation Blueprint")
-        
-        y_pred = selected_row["Yield Prediction"]
-        if "Good" in y_pred: st.success(f"**Predicted Efficiency Level:** {y_pred}")
-        elif "Moderate" in y_pred: st.warning(f"**Predicted Efficiency Level:** {y_pred}")
-        else: st.error(f"**Predicted Efficiency Level:** {y_pred}")
-            
-        st.markdown(f"""
-        > **Proposed Retrosynthetic Mechanism Protocol:** \n> * **Reaction Strategy:** {selected_row['Route']}  
-        > * **Target Derivative Dynamic SMILES Identity String:** `{selected_row['Redesigned SMILES']}`
-        """)
-        
-        # Synthetic FTIR graph generator layout
-        st.write("---")
-        st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
-        
-        wavenumbers = np.linspace(400, 4000, 500)
-        baseline_transmittance = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
-        
-        target_peak = int(selected_row["FTIR Peak"])
-        peak_intensity = 45.0 if "Good" in y_pred else 30.0
-        fragment_peak_effect = peak_intensity * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
-        simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
-        
-        chart_df = pd.DataFrame({
-            "Wavenumber (cm⁻¹)": wavenumbers,
-            "Transmittance (%)": np.clip(simulated_ftir_profile, 5.0, 100.0)
-        }).set_index("Wavenumber (cm⁻¹)")
-        
-        st.line_chart(chart_df, height=220)
-        st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
-        
-    else:
-        st.info("Awaiting execution pipeline loops to display generative structural visualization models...")
