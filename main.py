@@ -47,7 +47,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     if not parent_mol:
         return []
     
-    # 10 Chemically diverse functional group definitions for systematic lead optimization
     fragments = [
         {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions."},
         {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis."},
@@ -62,8 +61,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     ]
     
     derived_library = []
-    
-    # Validate user-selected atom index boundaries
     num_atoms = parent_mol.GetNumAtoms()
     if target_atom_idx >= num_atoms:
         target_atom_idx = 0
@@ -71,11 +68,8 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
     for idx, frag in enumerate(fragments):
         try:
             frag_mol = Chem.MolFromSmiles(frag["smiles"])
-            # Create a combined editable molecule matrix
             combo = Chem.ComboMol(parent_mol, frag_mol)
             ed_combo = Chem.EditableMol(combo)
-            
-            # Map the attachment vector link from target atom to the first atom of the fragment
             new_atom_idx = num_atoms 
             ed_combo.AddBond(int(target_atom_idx), new_atom_idx, order=Chem.BondType.SINGLE)
             
@@ -83,11 +77,8 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
             Chem.SanitizeMol(derived_mol)
             derived_smiles = Chem.MolToSmiles(derived_mol)
             
-            # Calculate dynamic descriptor parameters
             mw = round(Descriptors.MolWt(derived_mol), 2)
             logp = round(Descriptors.MolLogP(derived_mol), 2)
-            
-            # Simulate a pocket optimization binding score (Delta Score) based on molecular properties
             simulated_score = round(0.95 - (idx * 0.03) - (abs(logp) * 0.01), 2)
             
             derived_library.append({
@@ -102,7 +93,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
                 "FTIR Peak": frag["peak"]
             })
         except Exception:
-            # Fallback string manipulation if RDKit encounters valency limits on specific indices
             fallback_smiles = f"{frag['smiles']}{parent_smiles}".replace("==", "=")
             try:
                 f_mol = Chem.MolFromSmiles(fallback_smiles)
@@ -123,7 +113,6 @@ def generate_dynamic_derivatives(parent_smiles, target_atom_idx):
                 "FTIR Peak": frag["peak"]
             })
             
-    # Always sort the library from highest enhancing property score to lowest
     derived_library = sorted(derived_library, key=lambda x: x["Delta Score"], reverse=True)
     return pd.DataFrame(derived_library)
 
@@ -254,7 +243,6 @@ with col_inputs:
         can_run = bool(st.session_state.rd_receptor and st.session_state.rd_ligand)
         if st.button("🚀 Execute 10-Pose Redesign Optimization Array", type="primary", disabled=not can_run):
             with st.spinner("Processing deep optimization forward layers..."):
-                # Run the automated RDKit algorithm loop
                 results_df = generate_dynamic_derivatives(st.session_state.rd_parent_smiles, atom_vector)
                 st.session_state.rd_library = results_df
                 st.rerun()
@@ -273,6 +261,7 @@ with col_visuals:
         st.subheader("🔍 Selection Isolation & 3D Topography Mirror")
         chosen_variant_id = st.selectbox("Isolate variant to map properties:", options=st.session_state.rd_library["Variant ID"])
         
+        # FIX: Strict matching using full string matches key validation maps flawlessly
         selected_row = st.session_state.rd_library[st.session_state.rd_library["Variant ID"] == chosen_variant_id].iloc[0]
         
         variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
@@ -280,10 +269,12 @@ with col_visuals:
         if variant_pdb_string and st.session_state.rd_ligand:
             render_comparison_viewport(st.session_state.rd_ligand, variant_pdb_string)
             
+            # Sanitizing string pass splits to extract explicit alphanumeric prefix indices cleanly
+            safe_file_id = str(chosen_variant_id).split()[0].replace("-", "_")
             st.download_button(
                 label=f"📥 Download {chosen_variant_id.split()[0]} Coordinates (.PDB)",
                 data=variant_pdb_string,
-                file_name=f"redesign_{chosen_variant_id.split()[0]}.pdb",
+                file_name=f"redesign_{safe_file_id}.pdb",
                 mime="text/plain",
                 use_container_width=True,
                 key="dl_pdb_variant_btn"
@@ -312,7 +303,7 @@ with col_visuals:
         wavenumbers = np.linspace(400, 4000, 500)
         baseline_transmittance = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
         
-        target_peak = selected_row["FTIR Peak"]
+        target_peak = int(selected_row["FTIR Peak"])
         peak_intensity = 45.0 if "Good" in y_pred else 30.0
         fragment_peak_effect = peak_intensity * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
         simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
