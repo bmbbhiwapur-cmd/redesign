@@ -144,11 +144,14 @@ def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose
     except Exception:
         return -5.5 - (pose_idx * 0.3), real_residues[0], "Van der Waals Force"
 
-def generate_clean_2d_image(smiles_str, zoom_level=450):
+def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
             mol_to_draw = Chem.RemoveHs(mol)
+            if include_labels:
+                for atom in mol_to_draw.GetAtoms():
+                    atom.SetProp('atomNote', str(atom.GetIdx()))
             img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)))
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
@@ -217,87 +220,88 @@ def get_dynamic_fragments(parent_smiles):
         ]
     return subclass_title, fragments
 
-def run_cleaving_engine(parent_smiles, target_atom_idx):
+def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol: return []
         
     _, fragments = get_dynamic_fragments(parent_smiles)
     derived_library = []
     
-    try:
-        t_atom = parent_mol.GetAtomWithIdx(int(target_atom_idx))
-        is_terminal = (t_atom.GetDegree() == 1 and t_atom.GetSymbol() != 'C')
-    except Exception:
-        is_terminal = False
-        target_atom_idx = 0
-    
     for idx, frag in enumerate(fragments):
         try:
-            rw_mol = Chem.RWMol(parent_mol)
-            if is_terminal:
-                neighbor_idx = t_atom.GetNeighbors()[0].GetIdx()
-                rw_mol.RemoveAtom(int(target_atom_idx))
-                anchor_idx = neighbor_idx if neighbor_idx < int(target_atom_idx) else neighbor_idx - 1
+            if mechanism_mode == "Co-Crystal / Salt Formulation":
+                # Explicitly force a non-covalent separation
+                derived_smiles = f"{parent_smiles}.{frag['smiles']}"
+                test_mol = Chem.MolFromSmiles(derived_smiles)
+                mw = round(Descriptors.MolWt(test_mol), 2) if test_mol else 0
+                logp = round(Descriptors.MolLogP(test_mol), 2) if test_mol else 0
+                
+                derived_library.append({
+                    "Variant ID": f"Formulation-{idx+1:02d}",
+                    "Fragment Added": frag["name"] + " (Co-Crystal)",
+                    "Redesigned SMILES": derived_smiles,
+                    "Delta Score": round(-5.5 - (idx * 0.10), 2),
+                    "MW (g/mol)": mw,
+                    "LogP": logp,
+                    "Yield Prediction": "Pharmaceutical Salt Matrix",
+                    "Route": "Co-crystallization or therapeutic salt formulation protocol.",
+                    "FTIR Peak": int(frag["peak"])
+                })
             else:
-                anchor_idx = int(target_atom_idx)
+                # Force True Covalent Cleavage
+                rw_mol = Chem.RWMol(parent_mol)
+                t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
+                is_terminal = (t_atom.GetDegree() == 1 and t_atom.GetSymbol() != 'C')
                 
-            anchor_atom = rw_mol.GetAtomWithIdx(anchor_idx)
-            anchor_atom.SetNoImplicit(True)
-            anchor_atom.SetNumExplicitHs(0)
-            
-            frag_mol = Chem.MolFromSmiles(frag['smiles'])
-            parent_atoms = rw_mol.GetNumAtoms()
-            
-            combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
-            rw_combo = Chem.RWMol(combo)
-            rw_combo.AddBond(anchor_idx, parent_atoms, Chem.BondType.SINGLE)
-            
-            res_mol = rw_combo.GetMol()
-            
-            try:
-                Chem.SanitizeMol(res_mol)
-            except Exception:
-                res_mol.UpdatePropertyCache(strict=False)
-                Chem.SanitizeMol(
-                    res_mol, 
-                    Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES ^ Chem.SanitizeFlags.SANITIZE_VALENCE
-                )
+                if is_terminal:
+                    neighbor_idx = t_atom.GetNeighbors()[0].GetIdx()
+                    rw_mol.RemoveAtom(int(target_atom_idx))
+                    anchor_idx = neighbor_idx if neighbor_idx < int(target_atom_idx) else neighbor_idx - 1
+                else:
+                    anchor_idx = int(target_atom_idx)
+                    
+                anchor_atom = rw_mol.GetAtomWithIdx(anchor_idx)
+                anchor_atom.SetNoImplicit(True)
+                anchor_atom.SetNumExplicitHs(0)
                 
-            derived_smiles = Chem.MolToSmiles(res_mol)
-            test_mol = Chem.MolFromSmiles(derived_smiles)
-            if not test_mol: raise ValueError("Integrity fail")
+                frag_mol = Chem.MolFromSmiles(frag['smiles'])
+                parent_atoms = rw_mol.GetNumAtoms()
                 
-            mw = round(Descriptors.MolWt(test_mol), 2)
-            logp = round(Descriptors.MolLogP(test_mol), 2)
-            
-            derived_library.append({
-                "Variant ID": f"Derivative-{idx+1:02d}",
-                "Fragment Added": frag["name"],
-                "Redesigned SMILES": derived_smiles,
-                "Delta Score": round(-6.2 - (idx * 0.15) - (abs(logp) * 0.05), 2),
-                "MW (g/mol)": mw,
-                "LogP": logp,
-                "Yield Prediction": frag["yield"],
-                "Route": frag["route"],
-                "FTIR Peak": int(frag["peak"])
-            })
+                combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
+                rw_combo = Chem.RWMol(combo)
+                rw_combo.AddBond(anchor_idx, parent_atoms, Chem.BondType.SINGLE)
+                
+                res_mol = rw_combo.GetMol()
+                
+                try:
+                    Chem.SanitizeMol(res_mol)
+                except Exception:
+                    res_mol.UpdatePropertyCache(strict=False)
+                    Chem.SanitizeMol(
+                        res_mol, 
+                        Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES ^ Chem.SanitizeFlags.SANITIZE_VALENCE
+                    )
+                    
+                derived_smiles = Chem.MolToSmiles(res_mol)
+                test_mol = Chem.MolFromSmiles(derived_smiles)
+                if not test_mol: raise ValueError("Integrity fail")
+                    
+                mw = round(Descriptors.MolWt(test_mol), 2)
+                logp = round(Descriptors.MolLogP(test_mol), 2)
+                
+                derived_library.append({
+                    "Variant ID": f"Derivative-{idx+1:02d}",
+                    "Fragment Added": frag["name"],
+                    "Redesigned SMILES": derived_smiles,
+                    "Delta Score": round(-6.2 - (idx * 0.15) - (abs(logp) * 0.05), 2),
+                    "MW (g/mol)": mw,
+                    "LogP": logp,
+                    "Yield Prediction": frag["yield"],
+                    "Route": frag["route"],
+                    "FTIR Peak": int(frag["peak"])
+                })
         except Exception:
             continue
-            
-    if len(derived_library) == 0:
-        for idx, frag in enumerate(fragments):
-            derived_smiles = f"{parent_smiles}.{frag['smiles']}"
-            derived_library.append({
-                "Variant ID": f"Formulation-{idx+1:02d} (Co-Crystal)",
-                "Fragment Added": frag["name"] + " (Non-Covalent Base)",
-                "Redesigned SMILES": derived_smiles,
-                "Delta Score": -5.0,
-                "MW (g/mol)": 0,
-                "LogP": 0,
-                "Yield Prediction": "Pharmaceutical Salt Matrix",
-                "Route": "Co-crystallization or therapeutic salt formulation protocol.",
-                "FTIR Peak": int(frag["peak"])
-            })
             
     return derived_library
 
@@ -399,27 +403,40 @@ with col_params:
 
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
-        st.header("3. Clickable 2D Structural Map")
+        st.header("3. Reaction Mechanism & Target Selection")
         
         class_label, _ = get_dynamic_fragments(st.session_state.rd_parent_smiles)
         st.markdown(f"🔬 **AI Classification Profile Isolated:** `{class_label}`")
-        st.markdown("**AI Scaffold Scrutiny Active:** Customizing chemical substitution matrices...")
         
-        base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles)
+        # --- NEW UI: REACTION MODE & ATOM INDEX OVERRIDE ---
+        st.write("##### ⚙️ Synthesis Control Panel")
+        reaction_mode = st.radio(
+            "Select Modification Mechanism:", 
+            ["True Covalent Substitution (Cleavage & Attachment)", "Co-Crystal / Salt Formulation (Non-Covalent)"]
+        )
+        
+        show_labels = st.toggle("🔍 Show Atom Index Numbers on Structure", value=True)
+        base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles, include_labels=show_labels, zoom_level=600)
         if base_img: st.html(base_img)
             
-        scrutinized_vector = scrutiny_optimal_target_atom(st.session_state.rd_parent_smiles)
-        st.info("💡 Scaffold Scrutiny complete. Molecular cleavage vectors locked.")
+        auto_target = scrutiny_optimal_target_atom(st.session_state.rd_parent_smiles)
+        
+        if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
+            st.info("💡 Review the structure above and input the exact Atom Index (#) you wish to cleave and modify.")
+            target_idx = st.number_input("🎯 Target Atom Index for Cleavage", min_value=0, value=int(auto_target))
+        else:
+            target_idx = 0
+            st.info("💡 Co-Crystal mode selected. The functional group will be formulated alongside the parent compound without cleaving bonds.")
 
         if st.button("🚀 Start Positive Array", type="primary"):
             st.session_state.docking_results = None 
             with st.spinner("Processing structural operations..."):
-                results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, scrutinized_vector)
+                results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, target_idx, reaction_mode)
                 if len(results_list) > 0:
                     st.session_state.rd_library = pd.DataFrame(results_list)
                     st.rerun()
                 else:
-                    st.error("Structural substitution completely saturated. Data structures corrupt.")
+                    st.error("Structural substitution failed. Try selecting a different Atom Index or switch to Co-Crystal mode.")
 
 with col_visuals:
     st.header("4. Screening Array & Workspace Viewport")
@@ -449,59 +466,72 @@ with col_visuals:
             st.code(f"{str(selected_row['Redesigned SMILES'])}", language="text")
             
             st.write("---")
-            st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
-            wavenumbers = np.linspace(400, 4000, 500)
-            baseline = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
-            target_peak = int(selected_row["FTIR Peak"])
-            effect = 40.0 * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
-            
-            chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
-            st.line_chart(chart_df, height=220)
-            
-            # --- WRAP-SAFE TEXT RENDERING TO PREVENT SYNTAX/TRUNCATION ERRORS ---
-            clean_frag_string = str(selected_row['Fragment Added'])
-            clean_peak_integer = int(target_peak)
-            caption_html = (
-                f"<p style='text-align:center; font-size:12px; color:#666;'>"
-                f"Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the "
-                f"<b>{clean_frag_string}</b> modification around <b>{clean_peak_integer} cm⁻¹</b>.</p>"
-            )
-            st.markdown(caption_html, unsafe_allow_html=True)
-
-            st.write("---")
             st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
-            st.markdown("Run 5-pose unconstrained thermodynamic sampling.")
             
             det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
-            st.info(f"**Auto-Grid Locked Coordinates:** X: `{det_x}` | Y: `{det_y}` | Z: `{det_z}`")
 
             if st.button("🚀 Run 5-Pose Thermodynamic Docking Core", type="secondary", use_container_width=True):
-                with st.spinner("Processing thermodynamic docking arrays..."):
+                with st.spinner("Processing thermodynamic docking arrays across 5 unique poses..."):
                     pose_list = []
                     for p in range(5):
                         p_score, p_res, p_bond = run_true_vina_docking_pose(
                             str(selected_row["Redesigned SMILES"]), st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
                         )
-                        orig_score, _, _ = run_true_vina_docking_pose(
+                        orig_score, orig_res, orig_bond = run_true_vina_docking_pose(
                             st.session_state.rd_parent_smiles, st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
                         )
                         
                         pose_list.append({
-                            "Pose Ranked Mode": f"Pose #{p+1}",
+                            "Pose ID": f"Pose #{p+1}",
                             "Parent Energy": round(orig_score + 0.35, 2),
                             "Variant Energy": p_score,
-                            "Target Residue Anchor": p_res,
-                            "Bonding Class": p_bond
+                            "Parent Residue": orig_res,
+                            "Parent Bond": orig_bond,
+                            "Variant Residue": p_res,
+                            "Variant Bond": p_bond
                         })
-                    st.session_state.docking_results = pd.DataFrame(pose_list)
+                    st.session_state.docking_results = pose_list
             
             if st.session_state.docking_results is not None:
-                st.markdown("#### 📊 Comparative Multi-Pose Free Energy Report Card")
-                st.dataframe(st.session_state.docking_results, hide_index=True, use_container_width=True)
+                # --- HIGH-IMPACT COMPARATIVE DASHBOARD ---
+                st.write("---")
+                st.subheader("📊 Comparative Pose Analysis")
                 
+                # Create a dropdown to select which pose to inspect
+                pose_options = [p["Pose ID"] for p in st.session_state.docking_results]
+                selected_pose_name = st.selectbox("🎯 Select Docking Pose to Inspect", options=pose_options)
+                
+                # Retrieve the data for the selected pose
+                selected_pose_data = next(item for item in st.session_state.docking_results if item["Pose ID"] == selected_pose_name)
+                
+                # Massive Highlighted Metrics UI
+                col_metric_1, col_metric_2 = st.columns(2)
+                with col_metric_1:
+                    metric_html_1 = f"""
+                    <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 6px solid #1f77b4; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px;'>
+                        <h4 style='margin: 0; color: #555;'>Original Parent Scaffold</h4>
+                        <h1 style='margin: 5px 0; color: #1f77b4; font-size: 2.5rem;'>{selected_pose_data['Parent Energy']} <span style='font-size: 1rem;'>kcal/mol</span></h1>
+                        <p style='margin: 0; font-size: 1.1rem;'><strong>Residue:</strong> {selected_pose_data['Parent Residue']}</p>
+                        <p style='margin: 0; font-size: 1.1rem; color: #d62728;'><strong>Bond Type:</strong> {selected_pose_data['Parent Bond']}</p>
+                    </div>
+                    """
+                    st.markdown(metric_html_1, unsafe_allow_html=True)
+                    
+                with col_metric_2:
+                    metric_html_2 = f"""
+                    <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 6px solid #2ca02c; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px;'>
+                        <h4 style='margin: 0; color: #555;'>AI Redesigned Variant</h4>
+                        <h1 style='margin: 5px 0; color: #2ca02c; font-size: 2.5rem;'>{selected_pose_data['Variant Energy']} <span style='font-size: 1rem;'>kcal/mol</span></h1>
+                        <p style='margin: 0; font-size: 1.1rem;'><strong>Residue:</strong> {selected_pose_data['Variant Residue']}</p>
+                        <p style='margin: 0; font-size: 1.1rem; color: #d62728;'><strong>Bond Type:</strong> {selected_pose_data['Variant Bond']}</p>
+                    </div>
+                    """
+                    st.markdown(metric_html_2, unsafe_allow_html=True)
+
+                # --- POSE-SPECIFIC INTERACTIVE 3D VIEWER ---
                 if STMOL_AVAILABLE and st.session_state.rd_receptor:
                     st.write("---")
-                    st.subheader("🖥️ 3D Protein-Ligand Interaction Viewer Canvas")
+                    st.subheader(f"🖥️ 3D Protein-Ligand Interaction Viewport ({selected_pose_name})")
                     
                     view_style = st.selectbox("Select Pocket Topology View Mode:", ["Cartoon Backbone", "Ribbon Tracing", "Translucent Surface Mesh"])
                     
@@ -518,6 +548,7 @@ with col_visuals:
                         xyz_view.setStyle({'cartoon': {'color': 'spectrum'}})
                         xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.35, 'color': 'white'})
                         
+                    # Model original ligand
                     parent_pdb_geom = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
                     if parent_pdb_geom:
                         xyz_view.addModel(parent_pdb_geom, "pdb")
@@ -528,12 +559,12 @@ with col_visuals:
                             {'model': 1}
                         )
                         
+                    # Model variant
                     variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
                     if variant_pdb_geom:
                         xyz_view.addModel(variant_pdb_geom, "pdb")
                         xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
                         
-                        # --- WRAP-SAFE DICTIONARY LABEL TO PREVENT UNTERMINATED STRING ERRORS ---
                         label_string = f"Redesign variant: {str(selected_row['Variant ID'])}"
                         label_styles = {'fontColor':'green', 'backgroundColor': 'white', 'backgroundOpacity': 0.8}
                         label_model = {'model': 2}
