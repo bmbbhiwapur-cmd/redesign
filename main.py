@@ -387,7 +387,7 @@ with col_visuals:
             )
             if highlighted_img_html:
                 st.html(highlighted_img_html)
-            st.caption(f"**Structural Identification:** Newly introduced **{selected_row['Fragment Added']}** modification group structure layout layout view.")
+            st.caption(f"**Structural Identification:** Newly introduced **{str(selected_row['Fragment Added'])}** modification group structure layout layout view.")
             
             variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
             if variant_pdb_string:
@@ -404,14 +404,14 @@ with col_visuals:
             st.write("---")
             st.subheader("🧪 Synthetic Route Evaluation Blueprint")
             
-            y_pred = selected_row["Yield Prediction"]
+            y_pred = str(selected_row["Yield Prediction"])
             if "Good" in y_pred: st.success(f"**Predicted Efficiency Level:** {y_pred}")
             elif "Moderate" in y_pred: st.warning(f"**Predicted Efficiency Level:** {y_pred}")
             else: st.error(f"**Predicted Efficiency Level:** {y_pred}")
                 
             st.markdown(f"""
-            > **Proposed Retrosynthetic Mechanism Protocol:** \n> * **Reaction Strategy:** {selected_row['Route']}  
-            > * **Target Derivative Dynamic SMILES Identity String:** `{selected_row['Redesigned SMILES']}`
+            > **Proposed Retrosynthetic Mechanism Protocol:** \n> * **Reaction Strategy:** {str(selected_row['Route'])}  
+            > * **Target Derivative Dynamic SMILES Identity String:** `{str(selected_row['Redesigned SMILES'])}`
             """)
             
             st.write("---")
@@ -425,14 +425,17 @@ with col_visuals:
             fragment_peak_effect = peak_intensity * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
             simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
             
-            # FIXED: Encoding safe alphanumeric naming layout variables prevents index matching failures
             chart_df = pd.DataFrame({
                 "Wavenumber": wavenumbers,
                 "Transmittance": np.clip(simulated_ftir_profile, 5.0, 100.0)
             }).set_index("Wavenumber")
             
             st.line_chart(chart_df, height=220)
-            st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
+            
+            # FIXED: Added native string casting protections to handle Python 3.14 metrics compilation
+            safe_frag_name = str(selected_row['Fragment Added'])
+            safe_peak_val = int(target_peak)
+            st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{safe_frag_name}</b> modification around <b>{safe_peak_val} cm⁻¹</b>.</p>", unsafe_html=True)
 
             # --- AUTOMATED DOCKING SELECTION LOOP ACTIVATION ---
             st.write("---")
