@@ -17,7 +17,7 @@ def fetch_pdb_from_rcsb(pdb_id):
         urllib.request.urlretrieve(url, local_pdb)
         return True, local_pdb
     except Exception:
-        return False, f"Could not download PDB ID '{pdb_id.upper()}'."
+        return False, f"Could not find or download PDB ID '{pdb_id.upper()}'."
 
 def generate_pdb_string_from_smiles(smiles_str):
     """Generates a standard compliant PDB structural string using RDKit coordinates safely."""
@@ -26,14 +26,10 @@ def generate_pdb_string_from_smiles(smiles_str):
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
-            # Sanitize and assign basic stereochemistry before structural embedding
             Chem.SanitizeMol(mol)
             mol = Chem.AddHs(mol)
-            
-            # Use fallback parameters if standard 3D conformer embedding faces constraints
             params = AllChem.ETKDGv3()
             params.useRandomCoords = True
-            
             embed_status = AllChem.EmbedMolecule(mol, params)
             if embed_status >= 0:
                 AllChem.MMFFOptimizeMolecule(mol)
@@ -45,8 +41,6 @@ def generate_pdb_string_from_smiles(smiles_str):
 def render_comparison_viewport(parent_pdb, variant_pdb):
     """Uses 3Dmol.js to display a dual side-by-side interactive canvas comparing modifications."""
     import streamlit.components.v1 as components
-    
-    # Escape any backticks or special formatting to prevent JavaScript injection crashes
     safe_parent = parent_pdb.replace('`', '\\`').replace('$', '\\$') if parent_pdb else ""
     safe_variant = variant_pdb.replace('`', '\\`').replace('$', '\\$') if variant_pdb else ""
 
@@ -157,27 +151,4 @@ with col_inputs:
                     if mol:
                         st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
                         st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
-                        st.success("Lead file coordinates saved.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error reading molecule: {e}")
-
-    # Computational Generation Trigger Section
-    if st.session_state.rd_ligand is not None:
-        st.write("---")
-        st.header("3. Generative Growth Execution")
-        atom_vector = st.number_input("Target Modification Atom Index Vector (0-based)", min_value=0, value=0)
-        
-        can_run = bool(st.session_state.rd_receptor and st.session_state.rd_ligand)
-        if st.button("🚀 Execute 10-Pose Redesign Optimization Array", type="primary", disabled=not can_run):
-            with st.spinner("Processing deep optimization forward layers..."):
-                # Systematically design valid chemical transformations to prevent RDKit embedding crashes
-                p_smiles = st.session_state.rd_parent_smiles
-                library_data = [
-                    {"Variant ID": "Derivative-01", "Fragment Added": "Methyl (-CH3)", "Redesigned SMILES": f"C{p_smiles}", "Delta Score": 0.94, "Yield Prediction": "Good Yield (82%)", "Route": "Nucleophilic methylation using Methyl Iodide (MeI) under basic carbonate conditions.", "FTIR Peak": 2925},
-                    {"Variant ID": "Derivative-02", "Fragment Added": "Hydroxyl (-OH)", "Redesigned SMILES": f"O{p_smiles}", "Delta Score": 0.91, "Yield Prediction": "Moderate Yield (64%)", "Route": f"Aromatic C-H hydroxylation via copper-catalyzed oxidation protocols applied to core.", "FTIR Peak": 3450},
-                    {"Variant ID": "Derivative-03", "Fragment Added": "Amino (-NH2)", "Redesigned SMILES": f"N{p_smiles}", "Delta Score": 0.88, "Yield Prediction": "Good Yield (78%)", "Route": "Controlled nitration sequence followed by selective reduction utilizing Pd/C systems.", "FTIR Peak": 3320},
-                    {"Variant ID": "Derivative-04", "Fragment Added": "Fluorine (-F)", "Redesigned SMILES": f"F{p_smiles}", "Delta Score": 0.85, "Yield Prediction": "Poor Yield (35%)", "Route": "Late-stage electrophilic fluorination using Selectfluor reagent protocols.", "FTIR Peak": 1150},
-                    {"Variant ID": "Derivative-05", "Fragment Added": "Trifluoromethyl (-CF3)", "Redesigned SMILES": f"FC(F)(F){p_smiles}", "Delta Score": 0.82, "Yield Prediction": "Moderate Yield (52%)", "Route": "Trifluoromethylation mediated by Ruppert-Prakash reagent under copper catalysis.", "FTIR Peak": 1280},
-                    {"Variant ID": "Derivative-06", "Fragment Added": "Cyano (-C≡N)", "Redesigned SMILES": f"N#C{p_smiles}", "Delta Score": 0.79, "Yield Prediction": "Good Yield (85%)", "Route": "Rosenmund-von Braun cyanation using Copper(I) Cyanide in refluxing DMF.", "FTIR Peak": 2220},
-                    {"Variant ID": "Derivative-07", "Fragment Added": "Methoxy (-OCH3)", "Redesigned SMILES": f"CO{p_smiles}", "Delta Score": 0.76, "Yield Prediction": "Good Yield (89%)", "Route": "Williamson ether synthesis
+                        st.
