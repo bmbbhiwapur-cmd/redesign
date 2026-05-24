@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import urllib.request
-import re
 import numpy as np
 import pandas as pd
 import base64
@@ -38,8 +37,7 @@ def fetch_pdb_from_rcsb(pdb_id):
         return False, f"Could not find or download PDB ID '{pdb_id.upper()}'."
 
 def generate_pdb_string_from_smiles(smiles_str):
-    if not smiles_str:
-        return None
+    if not smiles_str: return None
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
@@ -172,6 +170,7 @@ def find_valid_cleavage_sites(smiles_str):
                 deg = atom.GetDegree()
                 hs = atom.GetTotalNumHs()
                 
+                # Exclude purely bridged carbons with no hydrogens, only select atoms that can accept bonds
                 if deg == 1 and sym != 'C':
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} (Terminal {sym})"})
                 elif sym == 'C' and hs > 0:
@@ -229,7 +228,7 @@ def get_dynamic_fragments(parent_smiles):
         ]
     return subclass_title, fragments
 
-# --- 100% CRASH-PROOF CLEAVING ENGINE ---
+# --- BULLETPROOF DUMMY TAG REPLACEMENT ENGINE ---
 def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol: return []
@@ -241,51 +240,48 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
         success = False
         derived_smiles = ""
         
-        # If user picked true covalent substitution, try the strict math first
-        if "Co-Crystal" not in mechanism_mode:
+        if mechanism_mode == "True Covalent Substitution (Cleavage & Attachment)":
             try:
+                # 1. Create working molecule
                 rw_mol = Chem.RWMol(parent_mol)
-                Chem.Kekulize(rw_mol, clearAromaticFlags=True) # Prevent aromatic ring crashes
-                
                 t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
                 is_terminal = (t_atom.GetDegree() == 1 and t_atom.GetSymbol() != 'C')
                 
+                # 2. Plant a "Dummy Tag" ([999*]) where we want the fragment
                 if is_terminal:
-                    neighbor_idx = t_atom.GetNeighbors()[0].GetIdx()
-                    rw_mol.RemoveAtom(int(target_atom_idx))
-                    anchor_idx = neighbor_idx if neighbor_idx < int(target_atom_idx) else neighbor_idx - 1
+                    # If it's a terminal group like -OH or -Cl, turn it entirely into a Dummy Tag
+                    t_atom.SetAtomicNum(0)
+                    t_atom.SetIsotope(999)
                 else:
-                    anchor_idx = int(target_atom_idx)
-                    
-                anchor_atom = rw_mol.GetAtomWithIdx(anchor_idx)
-                anchor_atom.SetNoImplicit(True)
-                anchor_atom.SetNumExplicitHs(0)
+                    # If it's a core ring atom, attach a Dummy Tag to it so we can grow a branch
+                    dummy = Chem.Atom(0)
+                    dummy.SetIsotope(999)
+                    new_idx = rw_mol.AddAtom(dummy)
+                    rw_mol.AddBond(int(target_atom_idx), new_idx, Chem.BondType.SINGLE)
                 
+                # Sanitize the tagged molecule
+                tagged_mol = rw_mol.GetMol()
+                Chem.SanitizeMol(tagged_mol)
+                
+                # 3. Graft the new fragment EXACTLY where the Dummy Tag is
+                pattern = Chem.MolFromSmarts("[999*]")
                 frag_mol = Chem.MolFromSmiles(frag['smiles'])
-                parent_atoms = rw_mol.GetNumAtoms()
                 
-                combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
-                rw_combo = Chem.RWMol(combo)
-                rw_combo.AddBond(anchor_idx, parent_atoms, Chem.BondType.SINGLE)
+                # RDKit will magically handle bonds and valency here
+                replaced_mols = AllChem.ReplaceSubstructs(tagged_mol, pattern, frag_mol, replaceAll=True)
                 
-                res_mol = rw_combo.GetMol()
-                
-                try:
-                    Chem.SanitizeMol(res_mol)
-                    derived_smiles = Chem.MolToSmiles(res_mol)
-                    success = True
-                except Exception:
-                    # RDKit soft-override for complex valency
-                    res_mol.UpdatePropertyCache(strict=False)
-                    Chem.SanitizeMol(res_mol, Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES ^ Chem.SanitizeFlags.SANITIZE_VALENCE ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
-                    derived_smiles = Chem.MolToSmiles(res_mol)
-                    if Chem.MolFromSmiles(derived_smiles): 
+                if replaced_mols:
+                    final_mol = replaced_mols[0]
+                    Chem.SanitizeMol(final_mol)
+                    derived_smiles = Chem.MolToSmiles(final_mol)
+                    
+                    # Verify integrity
+                    if Chem.MolFromSmiles(derived_smiles):
                         success = True
             except Exception:
-                success = False # It failed, trigger graceful fallback below
-        
-        # --- GRACEFUL FALLBACK ---
-        # If covalent failed, OR if user specifically asked for Co-Crystal, do this:
+                success = False
+
+        # Fallback processing if the user selected Co-Crystal OR if covalent chemistry was physically impossible
         if not success:
             derived_smiles = f"{parent_smiles}.{frag['smiles']}"
             frag_name = frag["name"] + " (Co-Crystal Fallback)" if "Co-Crystal" not in mechanism_mode else frag["name"] + " (Co-Crystal)"
@@ -414,7 +410,7 @@ with col_params:
         st.header("3. Reaction Mechanism & Target Selection")
         
         class_label, _ = get_dynamic_fragments(st.session_state.rd_parent_smiles)
-        st.markdown(f"🔬 **AI Classification Profile Isolated:** `{class_label}`")
+        st.write(f"🔬 **AI Classification Profile Isolated:** `{class_label}`")
         
         valid_sites = find_valid_cleavage_sites(st.session_state.rd_parent_smiles)
         
@@ -435,16 +431,14 @@ with col_params:
         
         if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
             st.info("💡 The system has automatically identified chemically legal cleavage sites. Select an atom from the list below.")
-            
             site_options = {site["label"]: site["index"] for site in valid_sites}
             selected_site_label = st.selectbox("🎯 Select Valid Target Atom for Substitution", options=list(site_options.keys()))
             target_idx = site_options[selected_site_label]
-            
         else:
             target_idx = 0
             st.info("💡 Co-Crystal mode selected. The functional group will be formulated alongside the parent compound without cleaving bonds.")
 
-        if st.button("🚀 Start Positive Array", type="primary"):
+        if st.button("🚀 Start Positive Array"):
             st.session_state.docking_results = None 
             with st.spinner("Processing structural operations..."):
                 results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, target_idx, reaction_mode)
@@ -452,13 +446,13 @@ with col_params:
                     st.session_state.rd_library = pd.DataFrame(results_list)
                     st.rerun()
                 else:
-                    st.error("Structural substitution failed. Try selecting a different Atom Index or switch to Co-Crystal mode.")
+                    st.error("Structural substitution failed. Please ensure the molecule has valid connection points.")
 
 with col_visuals:
     st.header("4. Screening Array & Workspace Viewport")
     
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_library is not None:
-        st.dataframe(st.session_state.rd_library[["Variant ID", "Fragment Added", "Redesigned SMILES", "Delta Score", "MW (g/mol)"]], hide_index=True, use_container_width=True)
+        st.dataframe(st.session_state.rd_library[["Variant ID", "Fragment Added", "Redesigned SMILES", "Delta Score", "MW (g/mol)"]], hide_index=True)
         
         st.write("---")
         st.subheader("🔍 Selection Isolation & 2D Topography Mirror")
@@ -471,22 +465,32 @@ with col_visuals:
             highlighted_img_html = generate_clean_2d_image(str(selected_row["Redesigned SMILES"]))
             if highlighted_img_html: st.html(highlighted_img_html)
             
-            st.caption(f"**Structural Identification:** Substituted internal **{str(selected_row['Fragment Added'])}** group parameters.")
+            st.write(f"**Structural Identification:** Appended functional group: **{str(selected_row['Fragment Added'])}**.")
             
             st.write("---")
             st.subheader("🧪 Synthetic Route Evaluation Blueprint")
             st.success(f"**Predicted Efficiency Level:** {str(selected_row['Yield Prediction'])}")
-            st.markdown(f"**Proposed Retrosynthetic Reaction Pathway:** {str(selected_row['Route'])}")
+            st.write(f"**Proposed Retrosynthetic Reaction Pathway:** {str(selected_row['Route'])}")
             
-            st.markdown("##### 📋 Copy-Paste Target Redesign String Package")
+            st.write("##### 📋 Target Redesign SMILES")
             st.code(f"{str(selected_row['Redesigned SMILES'])}", language="text")
+            
+            st.write("---")
+            st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
+            wavenumbers = np.linspace(400, 4000, 500)
+            baseline = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
+            target_peak = int(selected_row["FTIR Peak"])
+            effect = 40.0 * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
+            
+            chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
+            st.line_chart(chart_df, height=220)
             
             st.write("---")
             st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
             
             det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
 
-            if st.button("🚀 Run 5-Pose Thermodynamic Docking Core", type="secondary", use_container_width=True):
+            if st.button("🚀 Run 5-Pose Thermodynamic Docking Core"):
                 with st.spinner("Processing thermodynamic docking arrays across 5 unique poses..."):
                     pose_list = []
                     for p in range(5):
