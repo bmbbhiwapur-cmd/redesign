@@ -1,7 +1,15 @@
-libboost-all-dev
+build-essential
 swig
+libboost-all-dev
+libboost-thread-dev
+libboost-serialization-dev
+libboost-filesystem-dev
+libboost-program-options-dev
+libboost-system-dev
+libboost-python-dev
 libopenbabel-dev
 openbabel
 libxrender1
 libsm6
 libxext6
+libgl1
