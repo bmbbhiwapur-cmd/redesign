@@ -1,2 +1,4 @@
-libxrender1
-libxext6
+libboost-all-dev
+swig
+libopenbabel-dev
+openbabel
