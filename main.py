@@ -537,35 +537,49 @@ with col_visuals:
 
                 if STMOL_AVAILABLE and st.session_state.rd_receptor:
                     st.write("---")
-                    st.subheader(f"🖥️ 3D Protein-Ligand Interaction Viewport ({selected_pose_name})")
-                    
-                    view_style = st.selectbox("Select Pocket Topology View Mode:", ["Cartoon Backbone", "Ribbon Tracing", "Translucent Surface Mesh"])
-                    
+                    st.subheader(f"🖥️ High-Resolution Interaction Canvas ({selected_pose_name})")
+
+                    # 1. Advanced View Options
+                    view_style = st.selectbox(
+                        "Select Topology Mode:",
+                        ["Detailed Ball-and-Stick", "Cartoon with Surface", "Wireframe Backbone"]
+                    )
+
                     xyz_view = py3Dmol.view(width=700, height=500)
+
+                    # Load Receptor
                     if os.path.exists(st.session_state.rd_receptor):
                         with open(st.session_state.rd_receptor, "r") as pf:
                             xyz_view.addModel(pf.read(), "pdb")
-                            
-                    if view_style == "Cartoon Backbone":
+
+                    # Professional Styling Logic
+                    if view_style == "Detailed Ball-and-Stick":
+                        xyz_view.setStyle({'cartoon': {'opacity': 0.4, 'color': 'lightgray'}})
+                        xyz_view.addStyle({'resn': 'LIG'}, {'stick': {'radius': 0.3, 'colorscheme': 'greenCarbon'}})
+                        xyz_view.addStyle({'resn': 'LIG'}, {'sphere': {'scale': 0.5}}) # Ball-and-Stick effect
+                    elif view_style == "Cartoon with Surface":
                         xyz_view.setStyle({'cartoon': {'color': 'spectrum'}})
-                    elif view_style == "Ribbon Tracing":
-                        xyz_view.setStyle({'ribbon': {'color': 'spectrum'}})
+                        xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.3, 'color': 'white'})
                     else:
-                        xyz_view.setStyle({'cartoon': {'color': 'spectrum'}})
-                        xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.35, 'color': 'white'})
-                        
+                        xyz_view.setStyle({'backbone': {'color': 'white'}})
+
+                    # Model Parent (White) vs Redesign (Green) with high-res sticks
                     parent_pdb_geom = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
                     if parent_pdb_geom:
                         xyz_view.addModel(parent_pdb_geom, "pdb")
-                        xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.22}})
-                        xyz_view.addLabel("Original", {'fontColor':'black', 'backgroundColor': 'white'}, {'model': 1})
-                        
+                        xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.15}})
+
                     variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
                     if variant_pdb_geom:
                         xyz_view.addModel(variant_pdb_geom, "pdb")
+                        # Highlighting the redesign with depth
                         xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
-                        xyz_view.addLabel("Variant", {'fontColor':'white', 'backgroundColor': 'green'}, {'model': 2})
-                        
+                        xyz_view.addStyle({'model': 2}, {'sphere': {'scale': 0.4}})
+
+                        # Labeling the specific interaction residue
+                        label_text = f"Anchor: {selected_pose_data['Variant Residue']}"
+                        xyz_view.addLabel(label_text, {'fontColor': 'black', 'backgroundColor': 'yellow', 'fontSize': 14})
+
                     xyz_view.zoomTo()
                     showmol(xyz_view, height=500, width=700)
                         
