@@ -2,3 +2,6 @@ libboost-all-dev
 swig
 libopenbabel-dev
 openbabel
+libxrender1
+libsm6
+libxext6
