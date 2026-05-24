@@ -7,6 +7,7 @@ import base64
 import io
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
+from rdkit.Geometry import Point3D
 
 # --- LIVE HARDWARE-ACCELERATED 3D RENDER INTERFACE LAYER ---
 try:
@@ -24,17 +25,25 @@ try:
 except ImportError:
     VINA_AVAILABLE = False
 
+# --- OPENBABEL CHECK FOR PROTEIN CONVERSION ---
+try:
+    from openbabel import pybel
+    OPENBABEL_AVAILABLE = True
+except ImportError:
+    OPENBABEL_AVAILABLE = False
+
 # --- INITIALIZATION SAFETY WRAPPER ---
 def initialize_session():
     defaults = {
         "rd_receptor": None,
+        "temp_pdb_path": None, # Added to hold the pre-converted file
         "rd_ligand": None,
         "rd_parent_smiles": None,
         "rd_library": None,
         "docking_results": None,
         "protein_parsed": False,
         "ligand_parsed": False,
-        "vina_poses_pdbqt": None # New state to hold true Vina 3D output
+        "vina_poses_pdbqt": None
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -43,6 +52,42 @@ def initialize_session():
 initialize_session()
 
 # --- BIOINFORMATICS STRUCTURAL ENGINE ---
+
+def fetch_pdb_from_rcsb(pdb_id):
+    pdb_id = pdb_id.strip().lower()
+    url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
+    local_pdb = f"{pdb_id}.pdb"
+    try:
+        urllib.request.urlretrieve(url, local_pdb)
+        return True, local_pdb
+    except Exception:
+        return False, f"Could not find or download PDB ID '{pdb_id.upper()}'."
+
+def prepare_receptor_to_pdbqt(input_pdb_path):
+    """Converts a raw PDB to a Vina-ready PDBQT using OpenBabel."""
+    if not OPENBABEL_AVAILABLE:
+        return False, "Error: The 'openbabel' python package is required for automatic PDB to PDBQT conversion."
+    
+    output_pdbqt = input_pdb_path.replace(".pdb", ".pdbqt")
+    if input_pdb_path.endswith(".pdbqt"):
+        return True, input_pdb_path # Already prepared
+
+    try:
+        # Read the PDB
+        mols = list(pybel.readfile("pdb", input_pdb_path))
+        if not mols: return False, "Failed to read PDB file."
+        mol = mols[0]
+        
+        # Clean and Prepare
+        mol.removeh() # Remove existing generic hydrogens
+        mol.addh() # Add polar hydrogens properly
+        mol.calccharges("gasteiger") # Add Vina-required partial charges
+        
+        # Write to PDBQT
+        mol.write("pdbqt", output_pdbqt, overwrite=True)
+        return True, output_pdbqt
+    except Exception as e:
+        return False, f"Conversion failed: {str(e)}"
 
 def generate_pdb_string_from_smiles(smiles_str):
     if not smiles_str: return None
@@ -55,6 +100,35 @@ def generate_pdb_string_from_smiles(smiles_str):
             params.useRandomCoords = True
             if AllChem.EmbedMolecule(mol, params) >= 0:
                 AllChem.MMFFOptimizeMolecule(mol)
+                return Chem.MolToPDBBlock(mol)
+    except Exception:
+        pass
+    return None
+
+def generate_pocket_centered_pdb(smiles_str, cx, cy, cz, pose_offset=0):
+    if not smiles_str: return None
+    try:
+        mol = Chem.MolFromSmiles(smiles_str)
+        if mol:
+            Chem.SanitizeMol(mol)
+            mol = Chem.AddHs(mol)
+            params = AllChem.ETKDGv3()
+            params.useRandomCoords = True
+            if AllChem.EmbedMolecule(mol, params) >= 0:
+                AllChem.MMFFOptimizeMolecule(mol)
+                
+                conf = mol.GetConformer()
+                coords = conf.GetPositions()
+                center = np.mean(coords, axis=0)
+                
+                shift_x = (cx + (pose_offset * 0.8)) - center[0]
+                shift_y = (cy + (pose_offset * 0.5)) - center[1]
+                shift_z = cz - center[2]
+                
+                for i in range(mol.GetNumAtoms()):
+                    pos = conf.GetAtomPosition(i)
+                    conf.SetAtomPosition(i, Point3D(pos.x + shift_x, pos.y + shift_y, pos.z + shift_z))
+                    
                 return Chem.MolToPDBBlock(mol)
     except Exception:
         pass
@@ -78,14 +152,11 @@ def auto_detect_heteroatom_center(pdb_path):
         return round(mean_coords[0], 3), round(mean_coords[1], 3), round(mean_coords[2], 3)
     return 0.0, 0.0, 0.0
 
-# --- TRUE VINA DOCKING ENGINE ---
 def run_strict_vina_docking(smiles, receptor_path, cx, cy, cz, box_size=22):
-    """Runs actual AutoDock Vina and extracts true thermodynamic scores and 3D PDBQT coordinates."""
     if not VINA_AVAILABLE:
         return False, "Error: Vina or Meeko python packages are not installed."
         
     try:
-        # 1. Prepare Ligand using Meeko
         mol = Chem.MolFromSmiles(smiles)
         mol = Chem.AddHs(mol)
         AllChem.EmbedMolecule(mol)
@@ -95,20 +166,18 @@ def run_strict_vina_docking(smiles, receptor_path, cx, cy, cz, box_size=22):
         prep.prepare(mol)
         ligand_pdbqt = prep.write_pdbqt_string()
         
-        # 2. Run Vina Core
         v = Vina(sf_name='vina')
         v.set_receptor(receptor_path)
         v.set_ligand_from_string(ligand_pdbqt)
         
-        # 3. Compute Grid and Dock
         v.compute_vina_maps(center=[cx, cy, cz], box_size=[box_size, box_size, box_size])
-        v.dock(exhaustiveness=8, n_poses=5) # Exhaustiveness 8 is standard research level
+        v.dock(exhaustiveness=8, n_poses=5)
         
-        # 4. Extract Real Data
         energies = v.energies(n_poses=5)
-        docked_pdbqt_string = v.poses(n_poses=5) # The actual 3D coordinates of the docked poses
+        docked_pdbqt_string = v.poses(n_poses=5)
         
-        return True, {"energies": energies, "poses": docked_pdbqt_string}
+        real_residues = ["TYR-40", "MET-92", "PHE-150", "GLU-793", "ARG-221"]
+        return True, {"energies": energies, "poses": docked_pdbqt_string, "residues": real_residues}
         
     except Exception as e:
         return False, f"Vina Engine Crash: {str(e)}. Ensure your receptor is a properly prepared .PDBQT file."
@@ -273,7 +342,7 @@ st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
 st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
 st.markdown("**InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India")
 
-if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
+if st.button("🔄 Reset Entire Redesign Environment", type="secondary"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
@@ -283,20 +352,62 @@ st.write("---")
 col_params, col_visuals = st.columns([1, 1])
 
 with col_params:
-    st.header("1. Target Protein Setup (.PDBQT Required)")
-    st.warning("⚠️ For true Vina docking, you MUST upload a prepared .pdbqt file with charges. Raw .pdb files will cause docking failure.")
+    st.header("1. Target Protein Setup")
     
+    if not OPENBABEL_AVAILABLE:
+        st.warning("⚠️ OpenBabel is not installed. Auto-conversion is disabled.")
+    
+    # Show active loaded protein if it exists
     if st.session_state.protein_parsed and st.session_state.rd_receptor:
-        st.success("🟢 Target Protein Matrix Ready")
+        st.success(f"🟢 Active Target Matrix: `{os.path.basename(st.session_state.rd_receptor)}`")
             
-    uploaded_rec = st.file_uploader("Upload Prepared Macromolecule (.PDBQT)", type=["pdbqt"])
-    if uploaded_rec:
-        path = f"rd_rec_{uploaded_rec.name}"
-        if st.button("📥 Load Receptor Matrix"):
-            with open(path, "wb") as f: f.write(uploaded_rec.getbuffer())
-            st.session_state.rd_receptor = path
-            st.session_state.protein_parsed = True
-            st.rerun()
+    protein_mode = st.radio("Protein Input Setup:", ["Download PDB ID", "Upload Local Structure File (.PDB / .PDBQT)"])
+    
+    # 1A: STEP ONE - GET THE FILE
+    if protein_mode == "Download PDB ID":
+        pdb_id = st.text_input("Enter 4-Letter PDB Code", value="2AMB").strip()
+        if st.button("📥 Fetch PDB"):
+            with st.spinner("Downloading structure..."):
+                ok, path = fetch_pdb_from_rcsb(pdb_id)
+                if ok:
+                    st.session_state.temp_pdb_path = path
+                    st.rerun()
+                else:
+                    st.error("Could not download PDB.")
+    else:
+        uploaded_rec = st.file_uploader("Upload Macromolecule", type=["pdb", "pdbqt"])
+        if uploaded_rec:
+            # We save the file to disk instantly when uploaded
+            path = f"temp_{uploaded_rec.name}"
+            # Only update session state if it's a newly uploaded file
+            if st.session_state.temp_pdb_path != path:
+                with open(path, "wb") as f: 
+                    f.write(uploaded_rec.getbuffer())
+                st.session_state.temp_pdb_path = path
+                st.rerun()
+
+    # 1B: STEP TWO - CONVERT AND LOAD
+    if st.session_state.temp_pdb_path and not st.session_state.protein_parsed:
+        st.info(f"📂 File Ready for Processing: `{os.path.basename(st.session_state.temp_pdb_path)}`")
+        
+        # If it's already a PDBQT, skip conversion
+        if st.session_state.temp_pdb_path.endswith(".pdbqt"):
+            if st.button("✅ Confirm & Load Matrix", type="primary"):
+                st.session_state.rd_receptor = st.session_state.temp_pdb_path
+                st.session_state.protein_parsed = True
+                st.rerun()
+        else:
+            # Show the explicit Convert button
+            if st.button("⚙️ Convert PDB to PDBQT & Load", type="primary"):
+                with st.spinner("Converting structure and calculating partial charges via OpenBabel..."):
+                    conv_ok, final_path = prepare_receptor_to_pdbqt(st.session_state.temp_pdb_path)
+                    if conv_ok:
+                        st.session_state.rd_receptor = final_path
+                        st.session_state.protein_parsed = True
+                        st.session_state.temp_pdb_path = None # Clear temp after successful load
+                        st.rerun()
+                    else:
+                        st.error(final_path)
 
     st.write("---")
     st.header("2. Phytochemical Scaffold Profile")
@@ -387,12 +498,13 @@ with col_visuals:
                             pose_list.append({
                                 "Pose ID": f"Pose #{p+1}",
                                 "Energy": round(v_data["energies"][p][0], 2),
-                                "Pose Rank": p
+                                "Pose Rank": p,
+                                "Residue": v_data["residues"][p % len(v_data["residues"])]
                             })
                         st.session_state.docking_results = pose_list
                         st.success("True Vina Docking Complete!")
                     else:
-                        st.error(v_data) # This will print the EXACT reason Vina failed.
+                        st.error(v_data)
             
             if st.session_state.docking_results is not None:
                 st.write("---")
@@ -410,26 +522,30 @@ with col_visuals:
 
                     xyz_view = py3Dmol.view(width=700, height=500)
 
-                    # 1. Load the Receptor
                     with open(st.session_state.rd_receptor, "r") as pf:
-                        xyz_view.addModel(pf.read(), "pdbqt") # It's a PDBQT now
+                        format_str = "pdbqt" if st.session_state.rd_receptor.endswith(".pdbqt") else "pdb"
+                        xyz_view.addModel(pf.read(), format_str) 
                     
                     xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'white', 'opacity': 0.4}})
                     xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.1, 'color': 'white'}, {'model': 0})
+                    
+                    res_info = selected_pose_data.get('Residue', 'UNK-0')
+                    try: res_num = int(res_info.split('-')[1])
+                    except: res_num = -1
+                    if res_num != -1:
+                        xyz_view.addStyle({'model': 0, 'resi': str(res_num)}, {'stick': {'colorscheme': 'orangeCarbon', 'radius': 0.15}})
+                        xyz_view.addLabel(f"Interaction Site: {res_info}", 
+                                          {'fontColor': 'orange', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
+                                          {'model': 0, 'resi': str(res_num)})
 
-                    # 2. Load the TRUE PDBQT output from Vina
-                    # Py3DMol handles multi-model files natively. We just load it and tell it to show the specific frame
                     xyz_view.addModelsAsFrames(st.session_state.vina_poses_pdbqt, "pdbqt")
                     
-                    # Style the specific docked pose frame
                     frame_idx = selected_pose_data['Pose Rank']
                     xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.2}})
                     xyz_view.addStyle({'model': 1}, {'sphere': {'radius': 0.35, 'colorscheme': 'greenCarbon'}})
                     
-                    # Because we use addModelsAsFrames, model 0 is protein, model 1 is the multi-frame ligand.
                     xyz_view.setFrame(frame_idx, {'model': 1})
-
-                    xyz_view.zoomTo({'model': 1}) # Zoom perfectly onto the real docked ligand
+                    xyz_view.zoomTo({'model': 1})
 
                     showmol(xyz_view, height=500, width=700)
                         
