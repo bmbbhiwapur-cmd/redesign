@@ -7,6 +7,7 @@ import base64
 import io
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
+from rdkit.Geometry import Point3D
 
 # --- LIVE HARDWARE-ACCELERATED 3D RENDER INTERFACE LAYER ---
 try:
@@ -47,6 +48,41 @@ def generate_pdb_string_from_smiles(smiles_str):
             params.useRandomCoords = True
             if AllChem.EmbedMolecule(mol, params) >= 0:
                 AllChem.MMFFOptimizeMolecule(mol)
+                return Chem.MolToPDBBlock(mol)
+    except Exception:
+        pass
+    return None
+
+# --- NEW: PHYSICAL TELEPORTATION ENGINE ---
+def generate_pocket_centered_pdb(smiles_str, cx, cy, cz, pose_offset=0):
+    """Generates the 3D molecule and explicitly moves its X,Y,Z coordinates inside the protein pocket."""
+    if not smiles_str: return None
+    try:
+        mol = Chem.MolFromSmiles(smiles_str)
+        if mol:
+            Chem.SanitizeMol(mol)
+            mol = Chem.AddHs(mol)
+            params = AllChem.ETKDGv3()
+            params.useRandomCoords = True
+            if AllChem.EmbedMolecule(mol, params) >= 0:
+                AllChem.MMFFOptimizeMolecule(mol)
+                
+                # Calculate the 3D center of the drug
+                conf = mol.GetConformer()
+                coords = conf.GetPositions()
+                center = np.mean(coords, axis=0)
+                
+                # Calculate the shift required to move it into the protein pocket
+                # (We add a tiny offset so Pose 1, 2, 3 don't perfectly overlap visually)
+                shift_x = (cx + (pose_offset * 0.8)) - center[0]
+                shift_y = (cy + (pose_offset * 0.5)) - center[1]
+                shift_z = cz - center[2]
+                
+                # Apply physical translation to every atom
+                for i in range(mol.GetNumAtoms()):
+                    pos = conf.GetAtomPosition(i)
+                    conf.SetAtomPosition(i, Point3D(pos.x + shift_x, pos.y + shift_y, pos.z + shift_z))
+                    
                 return Chem.MolToPDBBlock(mol)
     except Exception:
         pass
@@ -463,16 +499,6 @@ with col_visuals:
             st.code(f"{str(selected_row['Redesigned SMILES'])}", language="text")
             
             st.write("---")
-            st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
-            wavenumbers = np.linspace(400, 4000, 500)
-            baseline = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
-            target_peak = int(selected_row["FTIR Peak"])
-            effect = 40.0 * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
-            
-            chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
-            st.line_chart(chart_df, height=220)
-            
-            st.write("---")
             st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
             
             det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
@@ -488,6 +514,7 @@ with col_visuals:
                             st.session_state.rd_parent_smiles, st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
                         )
                         
+                        # Use pose_idx (p) to calculate rank
                         pose_list.append({
                             "Pose ID": f"Pose #{p+1}",
                             "Parent Energy": round(orig_score + 0.35, 2),
@@ -495,7 +522,8 @@ with col_visuals:
                             "Parent Residue": orig_res,
                             "Parent Bond": orig_bond,
                             "Variant Residue": p_res,
-                            "Variant Bond": p_bond
+                            "Variant Bond": p_bond,
+                            "Pose Rank": p # Store raw index to calculate 3D shift later
                         })
                     st.session_state.docking_results = pose_list
             
@@ -533,7 +561,6 @@ with col_visuals:
 
                     xyz_view = py3Dmol.view(width=700, height=500)
 
-                    # Extract target residue numbers to map them as physical sticks
                     var_anchor_res = selected_pose_data['Variant Residue']
                     try: var_res_num = int(var_anchor_res.split('-')[1])
                     except: var_res_num = -1
@@ -551,14 +578,12 @@ with col_visuals:
                     if view_style == "Interaction Pocket Focus (Atom-Level)":
                         xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'white', 'opacity': 0.3}})
                         
-                        # EXPLICITLY ATTACH AMINO ACID STICKS & LABELS
                         if var_res_num != -1:
                             xyz_view.addStyle({'model': 0, 'resi': str(var_res_num)}, {'stick': {'colorscheme': 'orangeCarbon', 'radius': 0.15}})
                             xyz_view.addLabel(f"Variant Anchor: {var_anchor_res}", 
                                               {'fontColor': 'orange', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
                                               {'model': 0, 'resi': str(var_res_num)})
                             
-                        # If original ligand anchors to a different residue, show that too
                         if par_res_num != -1 and par_res_num != var_res_num:
                             xyz_view.addStyle({'model': 0, 'resi': str(par_res_num)}, {'stick': {'colorscheme': 'cyanCarbon', 'radius': 0.15}})
                             xyz_view.addLabel(f"Original Anchor: {par_anchor_res}", 
@@ -571,15 +596,18 @@ with col_visuals:
                     else:
                         xyz_view.setStyle({'model': 0}, {'line': {}})
 
-                    # RENDER ORIGINAL LIGAND
-                    parent_pdb_geom = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
+                    # --- TELEPORT MOLECULES DIRECTLY INTO THE PROTEIN POCKET ---
+                    current_rank = selected_pose_data['Pose Rank']
+                    
+                    # Original Ligand
+                    parent_pdb_geom = generate_pocket_centered_pdb(st.session_state.rd_parent_smiles, det_x, det_y, det_z, pose_offset=current_rank)
                     if parent_pdb_geom:
                         xyz_view.addModel(parent_pdb_geom, "pdb")
                         xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.15}})
                         xyz_view.addLabel("Original Scaffold", {'fontColor': 'black', 'backgroundColor': 'white', 'fontSize': 12}, {'model': 1})
 
-                    # RENDER REDESIGNED LIGAND
-                    variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
+                    # Redesigned Ligand
+                    variant_pdb_geom = generate_pocket_centered_pdb(str(selected_row["Redesigned SMILES"]), det_x, det_y, det_z, pose_offset=current_rank)
                     if variant_pdb_geom:
                         xyz_view.addModel(variant_pdb_geom, "pdb")
                         xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
