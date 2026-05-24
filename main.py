@@ -25,6 +25,69 @@ try:
 except ImportError:
     VINA_AVAILABLE = False
 
+# --- COMMERCIAL GUI STYLING INJECTION ---
+def apply_ui_styling():
+    st.markdown("""
+        <style>
+            /* Global Background & Font */
+            .stApp { 
+                background-color: #f4f7f6; 
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            }
+            
+            /* Professional Card Style for Dataframes and UI Blocks */
+            div[data-testid="stDataFrame"], .stImage {
+                border-radius: 12px !important;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+                border: 1px solid #e0e0e0 !important;
+                background-color: white;
+                padding: 10px;
+            }
+            
+            /* Enhanced Headers */
+            h1, h2, h3 { 
+                color: #1e293b; 
+                font-weight: 600;
+            }
+            
+            /* Custom Interactive Primary Button */
+            div.stButton > button[kind="primary"] {
+                background-color: #2e66ff;
+                color: white;
+                border-radius: 8px;
+                border: none;
+                font-weight: bold;
+                padding: 0.5rem 1rem;
+                transition: all 0.3s ease;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            }
+            div.stButton > button[kind="primary"]:hover {
+                background-color: #1a4fd8;
+                box-shadow: 0 6px 12px rgba(46,102,255,0.2);
+                transform: translateY(-2px);
+            }
+            
+            /* Secondary Button Styling */
+            div.stButton > button[kind="secondary"] {
+                border-radius: 8px;
+                border: 1px solid #cbd5e1;
+                transition: all 0.3s ease;
+            }
+            div.stButton > button[kind="secondary"]:hover {
+                border-color: #94a3b8;
+                background-color: #f8fafc;
+            }
+            
+            /* Info & Success Boxes Styling */
+            div.stAlert {
+                border-radius: 10px !important;
+                border: none !important;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+
 # --- BIOINFORMATICS STRUCTURAL ENGINE ---
 
 def fetch_pdb_from_rcsb(pdb_id):
@@ -156,14 +219,12 @@ def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
             img_str = base64.b64encode(buffered.getvalue()).decode()
-            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); margin-bottom:15px;"/>'
+            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px;"/>'
     except Exception:
         pass
     return None
 
-# --- NEW INTELLIGENT SITE FINDER ---
 def find_valid_cleavage_sites(smiles_str):
-    """Scans the molecule and returns a list of chemically valid Atom Indices for substitution."""
     valid_sites = []
     try:
         mol = Chem.MolFromSmiles(smiles_str)
@@ -174,17 +235,13 @@ def find_valid_cleavage_sites(smiles_str):
                 deg = atom.GetDegree()
                 hs = atom.GetTotalNumHs()
                 
-                # Priority 1: Terminal Heteroatoms (-OH, -NH2, -Cl, etc.)
                 if deg == 1 and sym != 'C':
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} (Terminal {sym})"})
-                # Priority 2: Carbons with available Hydrogens
                 elif sym == 'C' and hs > 0:
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} ({sym} with available H)"})
-                # Priority 3: Non-Carbon Heteroatoms with available Hydrogens
                 elif sym in ['N', 'O', 'S'] and hs > 0:
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} (Core {sym} with available H)"})
                     
-        # Sort so terminal groups appear first, then by index
         valid_sites.sort(key=lambda x: (0 if "Terminal" in x["label"] else 1, x["index"]))
     except Exception:
         pass
@@ -244,7 +301,7 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     
     for idx, frag in enumerate(fragments):
         try:
-            if mechanism_mode == "Co-Crystal / Salt Formulation":
+            if mechanism_mode == "Co-Crystal / Salt Formulation (Non-Covalent)":
                 derived_smiles = f"{parent_smiles}.{frag['smiles']}"
                 test_mol = Chem.MolFromSmiles(derived_smiles)
                 mw = round(Descriptors.MolWt(test_mol), 2) if test_mol else 0
@@ -321,6 +378,8 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
 
 # --- APPLICATION SETUP ---
 st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
+apply_ui_styling() # <--- NEW GUI INJECTION APPLIED HERE
+
 st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
 st.markdown("**InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India")
 
@@ -333,7 +392,7 @@ if "docking_results" not in st.session_state: st.session_state.docking_results =
 if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
 if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
 
-if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
+if st.button("🔄 Reset Entire Redesign Environment", type="secondary"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
@@ -425,7 +484,6 @@ with col_params:
         
         st.write("##### ⚙️ Synthesis Control Panel")
         
-        # Check if the molecule is completely locked
         if len(valid_sites) == 0:
             st.warning("⚠️ High Steric Hindrance: No valid covalent substitution sites found on this molecule. Enforcing Co-Crystal mode.")
             reaction_mode = "Co-Crystal / Salt Formulation (Non-Covalent)"
@@ -442,7 +500,6 @@ with col_params:
         if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
             st.info("💡 The system has automatically identified chemically legal cleavage sites. Select an atom from the list below.")
             
-            # --- NEW INTELLIGENT DROPDOWN MENU ---
             site_options = {site["label"]: site["index"] for site in valid_sites}
             selected_site_label = st.selectbox("🎯 Select Valid Target Atom for Substitution", options=list(site_options.keys()))
             target_idx = site_options[selected_site_label]
@@ -493,7 +550,7 @@ with col_visuals:
             
             det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
 
-            if st.button("🚀 Run 5-Pose Thermodynamic Docking Core", type="secondary", use_container_width=True):
+            if st.button("🚀 Run 5-Pose Thermodynamic Docking Core", type="primary", use_container_width=True):
                 with st.spinner("Processing thermodynamic docking arrays across 5 unique poses..."):
                     pose_list = []
                     for p in range(5):
@@ -527,7 +584,7 @@ with col_visuals:
                 col_metric_1, col_metric_2 = st.columns(2)
                 with col_metric_1:
                     metric_html_1 = f"""
-                    <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 6px solid #1f77b4; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px;'>
+                    <div class="metric-card" style='border-left-color: #1f77b4;'>
                         <h4 style='margin: 0; color: #555;'>Original Parent Scaffold</h4>
                         <h1 style='margin: 5px 0; color: #1f77b4; font-size: 2.5rem;'>{selected_pose_data['Parent Energy']} <span style='font-size: 1rem;'>kcal/mol</span></h1>
                         <p style='margin: 0; font-size: 1.1rem;'><strong>Residue:</strong> {selected_pose_data['Parent Residue']}</p>
@@ -538,7 +595,7 @@ with col_visuals:
                     
                 with col_metric_2:
                     metric_html_2 = f"""
-                    <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 6px solid #2ca02c; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px;'>
+                    <div class="metric-card">
                         <h4 style='margin: 0; color: #555;'>AI Redesigned Variant</h4>
                         <h1 style='margin: 5px 0; color: #2ca02c; font-size: 2.5rem;'>{selected_pose_data['Variant Energy']} <span style='font-size: 1rem;'>kcal/mol</span></h1>
                         <p style='margin: 0; font-size: 1.1rem;'><strong>Residue:</strong> {selected_pose_data['Variant Residue']}</p>
