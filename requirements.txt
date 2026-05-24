@@ -1,11 +1,4 @@
-streamlit==1.39.0
-numpy==1.26.4
-pandas==2.2.2
-Pillow==10.4.0
-rdkit==2024.3.5
-py3Dmol==2.4.0
-stmol==0.0.9
-ipython-genutils==0.2.0
-meeko==0.5.0
-vina==1.2.5
-openbabel-wheel==3.1.1.20
+streamlit
+numpy
+pandas
+rdkit
