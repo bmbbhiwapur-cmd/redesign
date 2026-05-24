@@ -1,40 +1,4 @@
 import streamlit as st
-
-def apply_ui_styling():
-    # Inject Custom CSS for SaaS Look & Feel
-    st.markdown("""
-        <style>
-            /* Global Dashboard Styles */
-            .main { background-color: #f8f9fa; }
-            
-            /* Professional Card Style */
-            div.css-1r6slp0, .stDataFrame {
-                border-radius: 12px;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                border: 1px solid #e0e0e0;
-                padding: 15px;
-            }
-            
-            /* Highlighted Metric Blocks */
-            .metric-card {
-                background: white;
-                padding: 20px;
-                border-radius: 15px;
-                border-left: 5px solid #2ca02c;
-                box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
-            }
-            
-            /* Sidebar Branding */
-            section[data-testid="stSidebar"] {
-                background-color: #1e293b;
-                color: white;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
-# Call this at the very start of your script
-apply_ui_styling()
-import streamlit as st
 import os
 import urllib.request
 import re
