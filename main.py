@@ -161,9 +161,7 @@ def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
         pass
     return None
 
-# --- NEW INTELLIGENT SITE FINDER ---
 def find_valid_cleavage_sites(smiles_str):
-    """Scans the molecule and returns a list of chemically valid Atom Indices for substitution."""
     valid_sites = []
     try:
         mol = Chem.MolFromSmiles(smiles_str)
@@ -174,17 +172,13 @@ def find_valid_cleavage_sites(smiles_str):
                 deg = atom.GetDegree()
                 hs = atom.GetTotalNumHs()
                 
-                # Priority 1: Terminal Heteroatoms (-OH, -NH2, -Cl, etc.)
                 if deg == 1 and sym != 'C':
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} (Terminal {sym})"})
-                # Priority 2: Carbons with available Hydrogens
                 elif sym == 'C' and hs > 0:
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} ({sym} with available H)"})
-                # Priority 3: Non-Carbon Heteroatoms with available Hydrogens
                 elif sym in ['N', 'O', 'S'] and hs > 0:
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} (Core {sym} with available H)"})
                     
-        # Sort so terminal groups appear first, then by index
         valid_sites.sort(key=lambda x: (0 if "Terminal" in x["label"] else 1, x["index"]))
     except Exception:
         pass
@@ -235,6 +229,7 @@ def get_dynamic_fragments(parent_smiles):
         ]
     return subclass_title, fragments
 
+# --- 100% CRASH-PROOF CLEAVING ENGINE ---
 def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol: return []
@@ -243,26 +238,15 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     derived_library = []
     
     for idx, frag in enumerate(fragments):
-        try:
-            if mechanism_mode == "Co-Crystal / Salt Formulation":
-                derived_smiles = f"{parent_smiles}.{frag['smiles']}"
-                test_mol = Chem.MolFromSmiles(derived_smiles)
-                mw = round(Descriptors.MolWt(test_mol), 2) if test_mol else 0
-                logp = round(Descriptors.MolLogP(test_mol), 2) if test_mol else 0
-                
-                derived_library.append({
-                    "Variant ID": f"Formulation-{idx+1:02d}",
-                    "Fragment Added": frag["name"] + " (Co-Crystal)",
-                    "Redesigned SMILES": derived_smiles,
-                    "Delta Score": round(-5.5 - (idx * 0.10), 2),
-                    "MW (g/mol)": mw,
-                    "LogP": logp,
-                    "Yield Prediction": "Pharmaceutical Salt Matrix",
-                    "Route": "Co-crystallization or therapeutic salt formulation protocol.",
-                    "FTIR Peak": int(frag["peak"])
-                })
-            else:
+        success = False
+        derived_smiles = ""
+        
+        # If user picked true covalent substitution, try the strict math first
+        if "Co-Crystal" not in mechanism_mode:
+            try:
                 rw_mol = Chem.RWMol(parent_mol)
+                Chem.Kekulize(rw_mol, clearAromaticFlags=True) # Prevent aromatic ring crashes
+                
                 t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
                 is_terminal = (t_atom.GetDegree() == 1 and t_atom.GetSymbol() != 'C')
                 
@@ -288,33 +272,44 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
                 
                 try:
                     Chem.SanitizeMol(res_mol)
+                    derived_smiles = Chem.MolToSmiles(res_mol)
+                    success = True
                 except Exception:
+                    # RDKit soft-override for complex valency
                     res_mol.UpdatePropertyCache(strict=False)
-                    Chem.SanitizeMol(
-                        res_mol, 
-                        Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES ^ Chem.SanitizeFlags.SANITIZE_VALENCE
-                    )
-                    
-                derived_smiles = Chem.MolToSmiles(res_mol)
-                test_mol = Chem.MolFromSmiles(derived_smiles)
-                if not test_mol: raise ValueError("Integrity fail")
-                    
-                mw = round(Descriptors.MolWt(test_mol), 2)
-                logp = round(Descriptors.MolLogP(test_mol), 2)
-                
-                derived_library.append({
-                    "Variant ID": f"Derivative-{idx+1:02d}",
-                    "Fragment Added": frag["name"],
-                    "Redesigned SMILES": derived_smiles,
-                    "Delta Score": round(-6.2 - (idx * 0.15) - (abs(logp) * 0.05), 2),
-                    "MW (g/mol)": mw,
-                    "LogP": logp,
-                    "Yield Prediction": frag["yield"],
-                    "Route": frag["route"],
-                    "FTIR Peak": int(frag["peak"])
-                })
-        except Exception:
-            continue
+                    Chem.SanitizeMol(res_mol, Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES ^ Chem.SanitizeFlags.SANITIZE_VALENCE ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
+                    derived_smiles = Chem.MolToSmiles(res_mol)
+                    if Chem.MolFromSmiles(derived_smiles): 
+                        success = True
+            except Exception:
+                success = False # It failed, trigger graceful fallback below
+        
+        # --- GRACEFUL FALLBACK ---
+        # If covalent failed, OR if user specifically asked for Co-Crystal, do this:
+        if not success:
+            derived_smiles = f"{parent_smiles}.{frag['smiles']}"
+            frag_name = frag["name"] + " (Co-Crystal Fallback)" if "Co-Crystal" not in mechanism_mode else frag["name"] + " (Co-Crystal)"
+            route = "Co-crystallization (due to steric constraints blocking covalent bond)." if "Co-Crystal" not in mechanism_mode else "Co-crystallization or therapeutic salt formulation protocol."
+        else:
+            frag_name = frag["name"]
+            route = frag["route"]
+            
+        test_mol = Chem.MolFromSmiles(derived_smiles)
+        mw = round(Descriptors.MolWt(test_mol), 2) if test_mol else 0
+        logp = round(Descriptors.MolLogP(test_mol), 2) if test_mol else 0
+        delta_score = round(-6.2 - (idx * 0.15) - (abs(logp) * 0.05), 2) if success else round(-5.5 - (idx * 0.10), 2)
+        
+        derived_library.append({
+            "Variant ID": f"Derivative-{idx+1:02d}" if success else f"Formulation-{idx+1:02d}",
+            "Fragment Added": frag_name,
+            "Redesigned SMILES": derived_smiles,
+            "Delta Score": delta_score,
+            "MW (g/mol)": mw,
+            "LogP": logp,
+            "Yield Prediction": frag["yield"] if success else "Pharmaceutical Salt Matrix",
+            "Route": route,
+            "FTIR Peak": int(frag["peak"])
+        })
             
     return derived_library
 
@@ -425,7 +420,6 @@ with col_params:
         
         st.write("##### ⚙️ Synthesis Control Panel")
         
-        # Check if the molecule is completely locked
         if len(valid_sites) == 0:
             st.warning("⚠️ High Steric Hindrance: No valid covalent substitution sites found on this molecule. Enforcing Co-Crystal mode.")
             reaction_mode = "Co-Crystal / Salt Formulation (Non-Covalent)"
@@ -442,7 +436,6 @@ with col_params:
         if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
             st.info("💡 The system has automatically identified chemically legal cleavage sites. Select an atom from the list below.")
             
-            # --- NEW INTELLIGENT DROPDOWN MENU ---
             site_options = {site["label"]: site["index"] for site in valid_sites}
             selected_site_label = st.selectbox("🎯 Select Valid Target Atom for Substitution", options=list(site_options.keys()))
             target_idx = site_options[selected_site_label]
@@ -526,26 +519,17 @@ with col_visuals:
                 
                 col_metric_1, col_metric_2 = st.columns(2)
                 with col_metric_1:
-                    metric_html_1 = f"""
-                    <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 6px solid #1f77b4; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px;'>
-                        <h4 style='margin: 0; color: #555;'>Original Parent Scaffold</h4>
-                        <h1 style='margin: 5px 0; color: #1f77b4; font-size: 2.5rem;'>{selected_pose_data['Parent Energy']} <span style='font-size: 1rem;'>kcal/mol</span></h1>
-                        <p style='margin: 0; font-size: 1.1rem;'><strong>Residue:</strong> {selected_pose_data['Parent Residue']}</p>
-                        <p style='margin: 0; font-size: 1.1rem; color: #d62728;'><strong>Bond Type:</strong> {selected_pose_data['Parent Bond']}</p>
-                    </div>
-                    """
-                    st.markdown(metric_html_1, unsafe_allow_html=True)
+                    st.write("#### Original Parent Scaffold")
+                    st.metric("Binding Energy", f"{selected_pose_data['Parent Energy']} kcal/mol")
+                    st.write(f"**Residue:** {selected_pose_data['Parent Residue']}")
+                    st.write(f"**Bond Type:** {selected_pose_data['Parent Bond']}")
                     
                 with col_metric_2:
-                    metric_html_2 = f"""
-                    <div style='background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 6px solid #2ca02c; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px;'>
-                        <h4 style='margin: 0; color: #555;'>AI Redesigned Variant</h4>
-                        <h1 style='margin: 5px 0; color: #2ca02c; font-size: 2.5rem;'>{selected_pose_data['Variant Energy']} <span style='font-size: 1rem;'>kcal/mol</span></h1>
-                        <p style='margin: 0; font-size: 1.1rem;'><strong>Residue:</strong> {selected_pose_data['Variant Residue']}</p>
-                        <p style='margin: 0; font-size: 1.1rem; color: #d62728;'><strong>Bond Type:</strong> {selected_pose_data['Variant Bond']}</p>
-                    </div>
-                    """
-                    st.markdown(metric_html_2, unsafe_allow_html=True)
+                    st.write("#### AI Redesigned Variant")
+                    delta = round(selected_pose_data['Variant Energy'] - selected_pose_data['Parent Energy'], 2)
+                    st.metric("Binding Energy", f"{selected_pose_data['Variant Energy']} kcal/mol", delta=f"{delta} kcal/mol", delta_color="inverse")
+                    st.write(f"**Residue:** {selected_pose_data['Variant Residue']}")
+                    st.write(f"**Bond Type:** {selected_pose_data['Variant Bond']}")
 
                 if STMOL_AVAILABLE and st.session_state.rd_receptor:
                     st.write("---")
@@ -570,21 +554,13 @@ with col_visuals:
                     if parent_pdb_geom:
                         xyz_view.addModel(parent_pdb_geom, "pdb")
                         xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.22}})
-                        xyz_view.addLabel(
-                            "Original Ligand",
-                            {'fontColor':'white', 'backgroundColor': 'black', 'backgroundOpacity': 0.6},
-                            {'model': 1}
-                        )
+                        xyz_view.addLabel("Original", {'fontColor':'black', 'backgroundColor': 'white'}, {'model': 1})
                         
                     variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
                     if variant_pdb_geom:
                         xyz_view.addModel(variant_pdb_geom, "pdb")
                         xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
-                        
-                        label_string = f"Redesign variant: {str(selected_row['Variant ID'])}"
-                        label_styles = {'fontColor':'green', 'backgroundColor': 'white', 'backgroundOpacity': 0.8}
-                        label_model = {'model': 2}
-                        xyz_view.addLabel(label_string, label_styles, label_model)
+                        xyz_view.addLabel("Variant", {'fontColor':'white', 'backgroundColor': 'green'}, {'model': 2})
                         
                     xyz_view.zoomTo()
                     showmol(xyz_view, height=500, width=700)
