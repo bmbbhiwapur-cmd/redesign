@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import urllib.request
 import numpy as np
 import pandas as pd
 import base64
@@ -8,141 +7,23 @@ import io
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
 
-# --- LIVE HARDWARE-ACCELERATED 3D RENDER INTERFACE LAYER ---
-try:
-    import py3Dmol
-    from stmol import showmol
-    STMOL_AVAILABLE = True
-except ImportError:
-    STMOL_AVAILABLE = False
+# --- INITIALIZATION SAFETY WRAPPER ---
+def initialize_session():
+    defaults = {
+        "rd_parent_smiles": None,
+        "rd_library": None,
+        "ligand_parsed": False
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-# --- AUTODOCK VINA INTEGRATION CHECK ---
-try:
-    from vina import Vina
-    from meeko import MoleculePreparation
-    VINA_AVAILABLE = True
-except ImportError:
-    VINA_AVAILABLE = False
+initialize_session()
 
 # --- BIOINFORMATICS STRUCTURAL ENGINE ---
 
-def fetch_pdb_from_rcsb(pdb_id):
-    pdb_id = pdb_id.strip().lower()
-    url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
-    local_pdb = f"{pdb_id}.pdb"
-    try:
-        urllib.request.urlretrieve(url, local_pdb)
-        return True, local_pdb
-    except Exception:
-        return False, f"Could not find or download PDB ID '{pdb_id.upper()}'."
-
-def generate_pdb_string_from_smiles(smiles_str):
-    if not smiles_str: return None
-    try:
-        mol = Chem.MolFromSmiles(smiles_str)
-        if mol:
-            Chem.SanitizeMol(mol)
-            mol = Chem.AddHs(mol)
-            params = AllChem.ETKDGv3()
-            params.useRandomCoords = True
-            if AllChem.EmbedMolecule(mol, params) >= 0:
-                AllChem.MMFFOptimizeMolecule(mol)
-                return Chem.MolToPDBBlock(mol)
-    except Exception:
-        pass
-    return None
-
-def auto_detect_heteroatom_center(pdb_path):
-    coords = []
-    if pdb_path and os.path.exists(pdb_path):
-        with open(pdb_path, "r") as f:
-            for line in f:
-                if line.startswith("HETATM") and "HOH" not in line:
-                    try:
-                        x = float(line[30:38].strip())
-                        y = float(line[38:46].strip())
-                        z = float(line[46:54].strip())
-                        coords.append((x, y, z))
-                    except ValueError:
-                        continue
-    if coords:
-        mean_coords = np.mean(coords, axis=0)
-        return round(mean_coords[0], 3), round(mean_coords[1], 3), round(mean_coords[2], 3)
-    return 0.0, 0.0, 0.0
-
-def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose_idx):
-    real_residues = []
-    if receptor_path and os.path.exists(receptor_path):
-        try:
-            with open(receptor_path, "r") as f:
-                for line in f:
-                    if line.startswith("ATOM  "):
-                        res_name = line[17:20].strip()
-                        res_num = line[22:26].strip()
-                        x = float(line[30:38].strip())
-                        y = float(line[38:46].strip())
-                        z = float(line[46:54].strip())
-                        dist = np.sqrt((x-cx)**2 + (y-cy)**2 + (z-cz)**2)
-                        if dist <= 14.0:
-                            label = f"{res_name}-{res_num}"
-                            if label not in real_residues:
-                                real_residues.append(label)
-        except Exception:
-            pass
-            
-    if not real_residues:
-        real_residues = ["ILE-84", "VAL-112", "TYR-40", "MET-92", "PHE-150"]
-
-    if not VINA_AVAILABLE:
-        try:
-            mol = Chem.MolFromSmiles(smiles)
-            if not mol: return -5.0 - (pose_idx * 0.4), real_residues[0], "Steric Interaction"
-            mw = Descriptors.MolWt(mol)
-            logp = Descriptors.MolLogP(mol)
-            hbd = Descriptors.NumHDonors(mol)
-            
-            affinity = -4.8 - (mw * 0.012) - (abs(logp) * 0.24) - (pose_idx * 0.32)
-            res_call = real_residues[(int(mw) + pose_idx) % len(real_residues)]
-            
-            res_prefix = res_call.split("-")[0]
-            if res_prefix in ["PHE", "TYR", "TRP"]:
-                bond_call = "Pi-Stacking Interaction"
-            elif res_prefix in ["LEU", "ILE", "VAL", "ALA", "MET"]:
-                bond_call = "Hydrophobic Interaction"
-            elif res_prefix in ["SER", "THR", "ASN", "GLN", "ASP", "GLU", "LYS", "ARG", "HIS"]:
-                bond_call = "Hydrogen Bonding" if hbd > 0 else "Van der Waals Force"
-            else:
-                bond_call = "Hydrophobic Contact"
-                
-            return round(max(-12.0, affinity), 2), res_call, bond_call
-        except Exception:
-            return -5.5, real_residues[0], "Hydrophobic"
-
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        mol = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol)
-        AllChem.MMFFOptimizeMolecule(mol)
-        
-        prep = MoleculePreparation()
-        prep.prepare(mol[0])
-        ligand_pdbqt = prep.write_pdbqt_string()
-        
-        v = Vina(sf_name='vina')
-        v.set_receptor(receptor_path)
-        v.set_ligand_from_string(ligand_pdbqt)
-        v.compute_vina_maps(center=[cx, cy, cz], box_size=[box_size, box_size, box_size])
-        
-        v.dock(exhaustiveness=8, n_poses=5)
-        energies = v.energies(n_poses=5)
-        
-        res_call = real_residues[pose_idx % len(real_residues)]
-        bond_types = ["Hydrogen Bonding", "Hydrophobic Interaction", "Pi-Stacking", "Van der Waals Force"]
-        return round(energies[pose_idx][0], 2), res_call, bond_types[pose_idx % 4]
-    except Exception:
-        return -5.5 - (pose_idx * 0.3), real_residues[0], "Van der Waals Force"
-
 def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
+    """Generates high-quality 2D topographic maps of the molecules."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
@@ -160,6 +41,7 @@ def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
     return None
 
 def find_valid_cleavage_sites(smiles_str):
+    """Scans the parent molecule for chemically valid substitution anchor points."""
     valid_sites = []
     try:
         mol = Chem.MolFromSmiles(smiles_str)
@@ -170,7 +52,6 @@ def find_valid_cleavage_sites(smiles_str):
                 deg = atom.GetDegree()
                 hs = atom.GetTotalNumHs()
                 
-                # Exclude purely bridged carbons with no hydrogens, only select atoms that can accept bonds
                 if deg == 1 and sym != 'C':
                     valid_sites.append({"index": idx, "label": f"Atom #{idx} (Terminal {sym})"})
                 elif sym == 'C' and hs > 0:
@@ -184,6 +65,7 @@ def find_valid_cleavage_sites(smiles_str):
     return valid_sites
 
 def get_dynamic_fragments(parent_smiles):
+    """Identifies the scaffold class and proposes appropriate functional groups."""
     mol = Chem.MolFromSmiles(parent_smiles)
     if not mol: return "Standard Organic Scaffold", []
 
@@ -228,8 +110,56 @@ def get_dynamic_fragments(parent_smiles):
         ]
     return subclass_title, fragments
 
-# --- BULLETPROOF DUMMY TAG REPLACEMENT ENGINE ---
+def compute_adme_profile(smiles):
+    """Calculates Rule of 5 and Boiled Egg parameters for the given SMILES."""
+    mol = Chem.MolFromSmiles(smiles)
+    if not mol: return None
+
+    # Calculate Descriptors
+    mw = Descriptors.MolWt(mol)
+    logp = Descriptors.MolLogP(mol)
+    hbd = Descriptors.NumHDonors(mol)
+    hba = Descriptors.NumHAcceptors(mol)
+    tpsa = Descriptors.TPSA(mol)
+    rot_bonds = Descriptors.NumRotatableBonds(mol)
+
+    # Lipinski's Rule of 5
+    violations = 0
+    if mw > 500: violations += 1
+    if logp > 5: violations += 1
+    if hbd > 5: violations += 1
+    if hba > 10: violations += 1
+
+    # BOILED-Egg Model Estimation
+    # White (HIA): TPSA < 131.6, WLOGP < 5.88
+    # Yolk (BBB): TPSA < 79, WLOGP between 0.4 and 6.0
+    hia_absorbent = tpsa < 132 and logp < 5.88
+    bbb_permeant = tpsa < 79 and 0.4 <= logp <= 6.0
+
+    if bbb_permeant:
+        egg_zone = "Yolk (High BBB Permeability & GI Absorption)"
+        egg_color = "🍳"
+    elif hia_absorbent:
+        egg_zone = "White (High GI Absorption, No BBB Cross)"
+        egg_color = "🥚"
+    else:
+        egg_zone = "Outside (Poor Absorption Profile)"
+        egg_color = "🚫"
+
+    return {
+        "MW": round(mw, 2),
+        "LogP": round(logp, 2),
+        "HBD": hbd,
+        "HBA": hba,
+        "TPSA": round(tpsa, 2),
+        "Rotatable Bonds": rot_bonds,
+        "Lipinski Violations": violations,
+        "Egg Zone": egg_zone,
+        "Egg Color": egg_color
+    }
+
 def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
+    """Executes the dummy-tag replacement algorithm to construct new derivatives."""
     parent_mol = Chem.MolFromSmiles(parent_smiles)
     if not parent_mol: return []
         
@@ -242,46 +172,37 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
         
         if mechanism_mode == "True Covalent Substitution (Cleavage & Attachment)":
             try:
-                # 1. Create working molecule
                 rw_mol = Chem.RWMol(parent_mol)
                 t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
                 is_terminal = (t_atom.GetDegree() == 1 and t_atom.GetSymbol() != 'C')
                 
-                # 2. Plant a "Dummy Tag" ([999*]) where we want the fragment
+                # Plant Dummy Tag
                 if is_terminal:
-                    # If it's a terminal group like -OH or -Cl, turn it entirely into a Dummy Tag
                     t_atom.SetAtomicNum(0)
                     t_atom.SetIsotope(999)
                 else:
-                    # If it's a core ring atom, attach a Dummy Tag to it so we can grow a branch
                     dummy = Chem.Atom(0)
                     dummy.SetIsotope(999)
                     new_idx = rw_mol.AddAtom(dummy)
                     rw_mol.AddBond(int(target_atom_idx), new_idx, Chem.BondType.SINGLE)
                 
-                # Sanitize the tagged molecule
                 tagged_mol = rw_mol.GetMol()
                 Chem.SanitizeMol(tagged_mol)
                 
-                # 3. Graft the new fragment EXACTLY where the Dummy Tag is
+                # Graft the fragment
                 pattern = Chem.MolFromSmarts("[999*]")
                 frag_mol = Chem.MolFromSmiles(frag['smiles'])
-                
-                # RDKit will magically handle bonds and valency here
                 replaced_mols = AllChem.ReplaceSubstructs(tagged_mol, pattern, frag_mol, replaceAll=True)
                 
                 if replaced_mols:
                     final_mol = replaced_mols[0]
                     Chem.SanitizeMol(final_mol)
                     derived_smiles = Chem.MolToSmiles(final_mol)
-                    
-                    # Verify integrity
                     if Chem.MolFromSmiles(derived_smiles):
                         success = True
             except Exception:
                 success = False
 
-        # Fallback processing if the user selected Co-Crystal OR if covalent chemistry was physically impossible
         if not success:
             derived_smiles = f"{parent_smiles}.{frag['smiles']}"
             frag_name = frag["name"] + " (Co-Crystal Fallback)" if "Co-Crystal" not in mechanism_mode else frag["name"] + " (Co-Crystal)"
@@ -293,13 +214,11 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
         test_mol = Chem.MolFromSmiles(derived_smiles)
         mw = round(Descriptors.MolWt(test_mol), 2) if test_mol else 0
         logp = round(Descriptors.MolLogP(test_mol), 2) if test_mol else 0
-        delta_score = round(-6.2 - (idx * 0.15) - (abs(logp) * 0.05), 2) if success else round(-5.5 - (idx * 0.10), 2)
         
         derived_library.append({
             "Variant ID": f"Derivative-{idx+1:02d}" if success else f"Formulation-{idx+1:02d}",
             "Fragment Added": frag_name,
             "Redesigned SMILES": derived_smiles,
-            "Delta Score": delta_score,
             "MW (g/mol)": mw,
             "LogP": logp,
             "Yield Prediction": frag["yield"] if success else "Pharmaceutical Salt Matrix",
@@ -312,76 +231,35 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
 
 # --- APPLICATION SETUP ---
 st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
-st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
+st.title("🧬 InSilico BioSphere AI Molecular Redesign Studio")
 st.markdown("**InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India")
 
-# Initialize state management
-if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
-if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
-if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
-if "rd_library" not in st.session_state: st.session_state.rd_library = None
-if "docking_results" not in st.session_state: st.session_state.docking_results = None
-if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
-if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
-
-if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
+if st.button("🔄 Reset Environment", type="secondary"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
 
-engine_mode = st.radio(
-    "Select Optimization Processing Mode:",
-    ["MockFrag' Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"],
-    horizontal=True
-)
 st.write("---")
 
 col_params, col_visuals = st.columns([1, 1])
 
 with col_params:
-    st.header("1. Target Protein Grid Matrix")
+    st.header("1. Phytochemical Scaffold Profile")
     
-    if st.session_state.protein_parsed and st.session_state.rd_receptor:
-        st.success("🟢 Target Protein Matrix Ready")
-            
-    protein_mode = st.radio("Protein Input Setup:", ["Download PDB ID", "Upload Local Structure File (.PDB / .PDBQT)"])
-    
-    if protein_mode == "Download PDB ID":
-        pdb_id = st.text_input("Enter 4-Letter PDB Code", value="2AMB").strip()
-        if st.button("📥 Parse Target Vector", key="btn_parse_protein"):
-            ok, path = fetch_pdb_from_rcsb(pdb_id)
-            if ok:
-                st.session_state.rd_receptor = path
-                st.session_state.protein_parsed = True
-                st.rerun()
-    else:
-        uploaded_rec = st.file_uploader("Upload Macromolecule", type=["pdb", "pdbqt"])
-        if uploaded_rec:
-            path = f"rd_rec_{uploaded_rec.name}"
-            if st.button("📥 Parse Target Vector from File"):
-                with open(path, "wb") as f: f.write(uploaded_rec.getbuffer())
-                st.session_state.rd_receptor = path
-                st.session_state.protein_parsed = True
-                st.rerun()
-
-    st.write("---")
-    st.header("2. Phytochemical Scaffold Profile")
-    
-    if st.session_state.ligand_parsed and st.session_state.rd_ligand:
-        st.success("🟢 Phytochemical Lead Scaffold Coordinates Ready")
+    if st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
+        st.success("🟢 Phytochemical Lead Scaffold Loaded")
         
-    ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
+    ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule File (.SDF, .PDB)"])
     
     if ligand_mode == "Paste SMILES String":
-        default_smiles = "CC(=O)NC1=CC=C(O)C=C1" if "MockFrag" in engine_mode else ""
+        default_smiles = "CC(=O)NC1=CC=C(O)C=C1" # Paracetamol as a default example
         smiles_input = st.text_input("Parent Compound SMILES", value=default_smiles).strip()
-        if st.button("📥 Send Phytochemical Scaffold Profile"):
+        if st.button("📥 Load Scaffold Profile", type="primary"):
             st.session_state.rd_parent_smiles = smiles_input
-            st.session_state.rd_ligand = generate_pdb_string_from_smiles(smiles_input)
             st.session_state.ligand_parsed = True
             st.rerun()
     else:
-        uploaded_lig = st.file_uploader("Upload Molecule Block (.PDB, .SDF)", type=["pdb", "sdf"])
+        uploaded_lig = st.file_uploader("Upload Molecule Block", type=["pdb", "sdf"])
         if uploaded_lig:
             temp_path = f"temp_lig_{uploaded_lig.name}"
             with open(temp_path, "wb") as f: 
@@ -398,26 +276,27 @@ with col_params:
             if mol:
                 extracted_smiles = str(Chem.MolToSmiles(Chem.RemoveHs(mol)))
                 st.session_state.rd_parent_smiles = extracted_smiles
-                st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
                 st.session_state.ligand_parsed = True
-                st.success(f"🟢 Upload Complete! Auto-Extracted SMILES Matrix: {extracted_smiles}")
+                st.success(f"🟢 Upload Complete! Auto-Extracted SMILES Matrix: `{extracted_smiles}`")
+            else:
+                st.error("Could not extract chemical structure from the uploaded file.")
             
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
-    if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
+    if st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
-        st.header("3. Reaction Mechanism & Target Selection")
+        st.header("2. Reaction Mechanism & Target Selection")
         
         class_label, _ = get_dynamic_fragments(st.session_state.rd_parent_smiles)
-        st.write(f"🔬 **AI Classification Profile Isolated:** `{class_label}`")
+        st.write(f"🔬 **AI Scaffold Classification:** `{class_label}`")
         
         valid_sites = find_valid_cleavage_sites(st.session_state.rd_parent_smiles)
         
         st.write("##### ⚙️ Synthesis Control Panel")
         
         if len(valid_sites) == 0:
-            st.warning("⚠️ High Steric Hindrance: No valid covalent substitution sites found on this molecule. Enforcing Co-Crystal mode.")
+            st.warning("⚠️ High Steric Hindrance: Enforcing Co-Crystal mode.")
             reaction_mode = "Co-Crystal / Salt Formulation (Non-Covalent)"
         else:
             reaction_mode = st.radio(
@@ -430,33 +309,31 @@ with col_params:
         if base_img: st.html(base_img)
         
         if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
-            st.info("💡 The system has automatically identified chemically legal cleavage sites. Select an atom from the list below.")
+            st.info("💡 Select a target anchor atom from the topographic map above.")
             site_options = {site["label"]: site["index"] for site in valid_sites}
-            selected_site_label = st.selectbox("🎯 Select Valid Target Atom for Substitution", options=list(site_options.keys()))
+            selected_site_label = st.selectbox("🎯 Target Anchor Atom", options=list(site_options.keys()))
             target_idx = site_options[selected_site_label]
         else:
             target_idx = 0
-            st.info("💡 Co-Crystal mode selected. The functional group will be formulated alongside the parent compound without cleaving bonds.")
 
-        if st.button("🚀 Start Positive Array"):
-            st.session_state.docking_results = None 
+        if st.button("🚀 Generate Structural Derivatives", type="primary"):
             with st.spinner("Processing structural operations..."):
                 results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, target_idx, reaction_mode)
                 if len(results_list) > 0:
                     st.session_state.rd_library = pd.DataFrame(results_list)
                     st.rerun()
                 else:
-                    st.error("Structural substitution failed. Please ensure the molecule has valid connection points.")
+                    st.error("Structural substitution failed.")
 
 with col_visuals:
-    st.header("4. Screening Array & Workspace Viewport")
+    st.header("3. Derivative Screening Library")
     
-    if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_library is not None:
-        st.dataframe(st.session_state.rd_library[["Variant ID", "Fragment Added", "Redesigned SMILES", "Delta Score", "MW (g/mol)"]], hide_index=True)
+    if st.session_state.ligand_parsed and st.session_state.rd_library is not None:
+        st.dataframe(st.session_state.rd_library[["Variant ID", "Fragment Added", "MW (g/mol)", "LogP"]], hide_index=True, use_container_width=True)
         
         st.write("---")
-        st.subheader("🔍 Selection Isolation & 2D Topography Mirror")
-        chosen_variant_id = st.selectbox("Isolate variant to map modifications:", options=st.session_state.rd_library["Variant ID"])
+        st.subheader("🔍 Isolate Variant Topography")
+        chosen_variant_id = st.selectbox("Select variant to view structural map:", options=st.session_state.rd_library["Variant ID"])
         
         selected_rows = st.session_state.rd_library[st.session_state.rd_library["Variant ID"] == chosen_variant_id]
         if not selected_rows.empty:
@@ -468,7 +345,7 @@ with col_visuals:
             st.write(f"**Structural Identification:** Appended functional group: **{str(selected_row['Fragment Added'])}**.")
             
             st.write("---")
-            st.subheader("🧪 Synthetic Route Evaluation Blueprint")
+            st.subheader("🧪 Synthetic Route Evaluation")
             st.success(f"**Predicted Efficiency Level:** {str(selected_row['Yield Prediction'])}")
             st.write(f"**Proposed Retrosynthetic Reaction Pathway:** {str(selected_row['Route'])}")
             
@@ -476,98 +353,46 @@ with col_visuals:
             st.code(f"{str(selected_row['Redesigned SMILES'])}", language="text")
             
             st.write("---")
-            st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
+            st.subheader("📊 Theoretical Vibrational Spectrum (FTIR)")
             wavenumbers = np.linspace(400, 4000, 500)
             baseline = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
             target_peak = int(selected_row["FTIR Peak"])
             effect = 40.0 * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
             
-            chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
-            st.line_chart(chart_df, height=220)
-            
+            chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance (%)": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
+            st.line_chart(chart_df, height=250)
+
+            # --- NEW ADME ANALYSIS SECTION ---
             st.write("---")
-            st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
+            st.subheader("💊 Pharmacokinetics (ADME) & Rule of Five")
+            st.write("In silico profiling of structural absorption parameters.")
             
-            det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
+            adme_data = compute_adme_profile(str(selected_row['Redesigned SMILES']))
+            if adme_data:
+                # Core Metrics Row
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Mol. Weight", f"{adme_data['MW']} g/mol")
+                c2.metric("Lipophilicity (LogP)", f"{adme_data['LogP']}")
+                c3.metric("TPSA", f"{adme_data['TPSA']} Å²")
+                c4.metric("Rotatable Bonds", f"{adme_data['Rotatable Bonds']}")
 
-            if st.button("🚀 Run 5-Pose Thermodynamic Docking Core"):
-                with st.spinner("Processing thermodynamic docking arrays across 5 unique poses..."):
-                    pose_list = []
-                    for p in range(5):
-                        p_score, p_res, p_bond = run_true_vina_docking_pose(
-                            str(selected_row["Redesigned SMILES"]), st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
-                        )
-                        orig_score, orig_res, orig_bond = run_true_vina_docking_pose(
-                            st.session_state.rd_parent_smiles, st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
-                        )
-                        
-                        pose_list.append({
-                            "Pose ID": f"Pose #{p+1}",
-                            "Parent Energy": round(orig_score + 0.35, 2),
-                            "Variant Energy": p_score,
-                            "Parent Residue": orig_res,
-                            "Parent Bond": orig_bond,
-                            "Variant Residue": p_res,
-                            "Variant Bond": p_bond
-                        })
-                    st.session_state.docking_results = pose_list
-            
-            if st.session_state.docking_results is not None:
-                st.write("---")
-                st.subheader("📊 Comparative Pose Analysis")
+                # HBD / HBA Row
+                st.write("") # Spacer
+                c5, c6 = st.columns(2)
+                c5.write(f"**H-Bond Donors:** {adme_data['HBD']} (Limit ≤ 5)")
+                c6.write(f"**H-Bond Acceptors:** {adme_data['HBA']} (Limit ≤ 10)")
                 
-                pose_options = [p["Pose ID"] for p in st.session_state.docking_results]
-                selected_pose_name = st.selectbox("🎯 Select Docking Pose to Inspect", options=pose_options)
+                st.write("##### ⚖️ Empirical Rule Models")
                 
-                selected_pose_data = next(item for item in st.session_state.docking_results if item["Pose ID"] == selected_pose_name)
-                
-                col_metric_1, col_metric_2 = st.columns(2)
-                with col_metric_1:
-                    st.write("#### Original Parent Scaffold")
-                    st.metric("Binding Energy", f"{selected_pose_data['Parent Energy']} kcal/mol")
-                    st.write(f"**Residue:** {selected_pose_data['Parent Residue']}")
-                    st.write(f"**Bond Type:** {selected_pose_data['Parent Bond']}")
-                    
-                with col_metric_2:
-                    st.write("#### AI Redesigned Variant")
-                    delta = round(selected_pose_data['Variant Energy'] - selected_pose_data['Parent Energy'], 2)
-                    st.metric("Binding Energy", f"{selected_pose_data['Variant Energy']} kcal/mol", delta=f"{delta} kcal/mol", delta_color="inverse")
-                    st.write(f"**Residue:** {selected_pose_data['Variant Residue']}")
-                    st.write(f"**Bond Type:** {selected_pose_data['Variant Bond']}")
+                # Lipinski Rule Output
+                lip_color = "🟢 PASS" if adme_data["Lipinski Violations"] <= 1 else "🔴 FAIL"
+                st.markdown(f"**Lipinski's Rule of Five:** {lip_color} *(Violations: {adme_data['Lipinski Violations']})*")
+                if adme_data["Lipinski Violations"] > 1:
+                    st.caption("⚠️ *Warning: High probability of poor oral bioavailability.*")
 
-                if STMOL_AVAILABLE and st.session_state.rd_receptor:
-                    st.write("---")
-                    st.subheader(f"🖥️ 3D Protein-Ligand Interaction Viewport ({selected_pose_name})")
-                    
-                    view_style = st.selectbox("Select Pocket Topology View Mode:", ["Cartoon Backbone", "Ribbon Tracing", "Translucent Surface Mesh"])
-                    
-                    xyz_view = py3Dmol.view(width=700, height=500)
-                    if os.path.exists(st.session_state.rd_receptor):
-                        with open(st.session_state.rd_receptor, "r") as pf:
-                            xyz_view.addModel(pf.read(), "pdb")
-                            
-                    if view_style == "Cartoon Backbone":
-                        xyz_view.setStyle({'cartoon': {'color': 'spectrum'}})
-                    elif view_style == "Ribbon Tracing":
-                        xyz_view.setStyle({'ribbon': {'color': 'spectrum'}})
-                    else:
-                        xyz_view.setStyle({'cartoon': {'color': 'spectrum'}})
-                        xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.35, 'color': 'white'})
-                        
-                    parent_pdb_geom = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
-                    if parent_pdb_geom:
-                        xyz_view.addModel(parent_pdb_geom, "pdb")
-                        xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.22}})
-                        xyz_view.addLabel("Original", {'fontColor':'black', 'backgroundColor': 'white'}, {'model': 1})
-                        
-                    variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
-                    if variant_pdb_geom:
-                        xyz_view.addModel(variant_pdb_geom, "pdb")
-                        xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
-                        xyz_view.addLabel("Variant", {'fontColor':'white', 'backgroundColor': 'green'}, {'model': 2})
-                        
-                    xyz_view.zoomTo()
-                    showmol(xyz_view, height=500, width=700)
+                # Boiled Egg Output
+                st.markdown(f"**BOILED-Egg Model:** {adme_data['Egg Color']} {adme_data['Egg Zone']}")
+                st.caption("*(Based on predictive boundaries mapping TPSA vs. WLOGP)*")
                         
     else:
-        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
+        st.info("📊 Workspace Gated: Please load a parent scaffold and generate derivatives to view results.")
