@@ -1,3 +1,0 @@
-openbabel
-libopenbabel-dev
-swig
