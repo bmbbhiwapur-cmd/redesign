@@ -303,21 +303,13 @@ st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
 st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
 st.markdown("**InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India")
 
-# Initialize state management cleanly to prevent wrapping errors
-if "rd_receptor" not in st.session_state:
-    st.session_state.rd_receptor = None
-if "rd_ligand" not in st.session_state:
-    st.session_state.rd_ligand = None
-if "rd_parent_smiles" not in st.session_state:
-    st.session_state.rd_parent_smiles = None
-if "rd_library" not in st.session_state:
-    st.session_state.rd_library = None
-if "docking_results" not in st.session_state:
-    st.session_state.docking_results = None
-if "protein_parsed" not in st.session_state:
-    st.session_state.protein_parsed = False
-if "ligand_parsed" not in st.session_state:
-    st.session_state.ligand_parsed = False
+if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
+if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
+if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
+if "rd_library" not in st.session_state: st.session_state.rd_library = None
+if "docking_results" not in st.session_state: st.session_state.docking_results = None
+if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
+if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
 
 if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
     for key in list(st.session_state.keys()):
@@ -541,12 +533,14 @@ with col_visuals:
 
                     xyz_view = py3Dmol.view(width=700, height=500)
 
-                    # Extract target residue number to highlight
-                    anchor_res = selected_pose_data['Variant Residue']
-                    try:
-                        res_num = int(anchor_res.split('-')[1])
-                    except:
-                        res_num = -1
+                    # Extract target residue numbers to map them as physical sticks
+                    var_anchor_res = selected_pose_data['Variant Residue']
+                    try: var_res_num = int(var_anchor_res.split('-')[1])
+                    except: var_res_num = -1
+                    
+                    par_anchor_res = selected_pose_data['Parent Residue']
+                    try: par_res_num = int(par_anchor_res.split('-')[1])
+                    except: par_res_num = -1
 
                     # Load Receptor
                     if os.path.exists(st.session_state.rd_receptor):
@@ -555,18 +549,21 @@ with col_visuals:
 
                     # High-Resolution Styling Modes
                     if view_style == "Interaction Pocket Focus (Atom-Level)":
-                        # Make whole protein a translucent ghost
-                        xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'white', 'opacity': 0.4}})
+                        xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'white', 'opacity': 0.3}})
                         
-                        # Dynamically highlight the specific predicted residue inside the active site
-                        if res_num != -1:
-                            xyz_view.addStyle({'model': 0, 'resi': str(res_num)}, {'stick': {'colorscheme': 'orangeCarbon', 'radius': 0.2}})
-                            xyz_view.addStyle({'model': 0, 'resi': str(res_num)}, {'sphere': {'radius': 0.4, 'color': 'orange'}})
-                            # Add an explicit interaction label
-                            label_content = f"Target Anchor: {anchor_res}\\nBond: {selected_pose_data['Variant Bond']}"
-                            xyz_view.addLabel(label_content, 
-                                              {'fontColor': 'white', 'backgroundColor': '#d62728', 'showBackground': True}, 
-                                              {'model': 0, 'resi': str(res_num)})
+                        # EXPLICITLY ATTACH AMINO ACID STICKS & LABELS
+                        if var_res_num != -1:
+                            xyz_view.addStyle({'model': 0, 'resi': str(var_res_num)}, {'stick': {'colorscheme': 'orangeCarbon', 'radius': 0.15}})
+                            xyz_view.addLabel(f"Variant Anchor: {var_anchor_res}", 
+                                              {'fontColor': 'orange', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
+                                              {'model': 0, 'resi': str(var_res_num)})
+                            
+                        # If original ligand anchors to a different residue, show that too
+                        if par_res_num != -1 and par_res_num != var_res_num:
+                            xyz_view.addStyle({'model': 0, 'resi': str(par_res_num)}, {'stick': {'colorscheme': 'cyanCarbon', 'radius': 0.15}})
+                            xyz_view.addLabel(f"Original Anchor: {par_anchor_res}", 
+                                              {'fontColor': 'cyan', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
+                                              {'model': 0, 'resi': str(par_res_num)})
                     
                     elif view_style == "Full Protein + Surface":
                         xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'spectrum'}})
@@ -574,20 +571,25 @@ with col_visuals:
                     else:
                         xyz_view.setStyle({'model': 0}, {'line': {}})
 
-                    # Render Redesigned Ligand with Atom-Level Ball-and-Stick
+                    # RENDER ORIGINAL LIGAND
+                    parent_pdb_geom = generate_pdb_string_from_smiles(st.session_state.rd_parent_smiles)
+                    if parent_pdb_geom:
+                        xyz_view.addModel(parent_pdb_geom, "pdb")
+                        xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.15}})
+                        xyz_view.addLabel("Original Scaffold", {'fontColor': 'black', 'backgroundColor': 'white', 'fontSize': 12}, {'model': 1})
+
+                    # RENDER REDESIGNED LIGAND
                     variant_pdb_geom = generate_pdb_string_from_smiles(str(selected_row["Redesigned SMILES"]))
                     if variant_pdb_geom:
                         xyz_view.addModel(variant_pdb_geom, "pdb")
-                        xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.2}})
-                        xyz_view.addStyle({'model': 1}, {'sphere': {'radius': 0.35, 'colorscheme': 'greenCarbon'}})
-                        xyz_view.addLabel("Redesigned Ligand", {'fontColor': 'black', 'backgroundColor': 'lightgreen'}, {'model': 1})
+                        xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
+                        xyz_view.addStyle({'model': 2}, {'sphere': {'radius': 0.35, 'colorscheme': 'greenCarbon'}})
+                        xyz_view.addLabel("Redesign Variant", {'fontColor': 'black', 'backgroundColor': 'lightgreen', 'fontSize': 12}, {'model': 2})
 
                     # Auto-Zoom Camera Engine
-                    if view_style == "Interaction Pocket Focus (Atom-Level)" and res_num != -1:
-                        # Zoom camera directly into the molecular pocket interaction
-                        xyz_view.zoomTo({'model': 0, 'resi': str(res_num)})
+                    if view_style == "Interaction Pocket Focus (Atom-Level)" and var_res_num != -1:
+                        xyz_view.zoomTo({'model': 0, 'resi': str(var_res_num)})
                     else:
-                        # Zoom out to see the entire complex
                         xyz_view.zoomTo()
 
                     showmol(xyz_view, height=500, width=700)
