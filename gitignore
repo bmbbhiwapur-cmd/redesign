@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# App-generated temp files
+temp_*.pdb
+temp_*.pdbqt
+*.pdb
+*.pdbqt
+!example_receptor.pdb
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Logs
+*.log

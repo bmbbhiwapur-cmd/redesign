@@ -1,0 +1,15 @@
+# Full requirements including AutoDock Vina + OpenBabel
+# Use this with the Docker deployment (Dockerfile provided)
+# For Streamlit Community Cloud, use the basic requirements.txt instead
+
+streamlit>=1.32.0
+numpy>=1.24.0
+pandas>=2.0.0
+rdkit>=2023.9.1
+py3Dmol>=2.0.4
+stmol>=0.0.9
+Pillow>=10.0.0
+
+# Docking stack (requires system-level libraries via Dockerfile)
+vina>=1.2.5
+meeko>=0.5.0
