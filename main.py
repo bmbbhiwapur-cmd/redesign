@@ -372,7 +372,7 @@ def generate_html_report(engine_mode, protein_id, protein_meta, parent_smiles, r
     <body>
         <div class="header-banner">
             <span class="copyright-header">copyright@sarang dhote</span>
-            <h1>🧬 InSilico BioSphere</h1>
+            <h1>🧬 InSilico BioSphere-Redesign + ADME Report </h1>
             <p>Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry</p>
             <p>Shivaji Science College, Nagpur, Maharashtra, India | Contact: sarangresearch@gmail.com</p>
         </div>
