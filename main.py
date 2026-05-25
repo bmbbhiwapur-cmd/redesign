@@ -235,5 +235,4 @@ with col_params:
             
     protein_mode = st.radio("Protein Input Setup:", ["Download PDB ID", "Upload Local Structure File (.PDB / .PDBQT)"])
     
-    if protein_mode == "Download PDB ID":
-        pdb_id = st.text_input("
+    if protein
