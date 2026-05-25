@@ -9,13 +9,6 @@ import io
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
 
-# --- INTERACTIVE VISUALS CHECK ---
-try:
-    import plotly.graph_objects as go
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-
 # --- INITIALIZATION SAFETY WRAPPER ---
 def initialize_session():
     defaults = {
@@ -216,73 +209,70 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     return derived_library
 
 
-# --- ADME & PHARMACOKINETICS ENGINE ---
+# --- ADVANCED ADME & PHARMACOKINETICS ENGINE ---
 
 def get_iupac_name(smiles):
     try:
-        # Pinging NIH CACTUS database for automated nomenclature translation
         encoded_smiles = urllib.parse.quote(smiles, safe='')
         url = f"https://cactus.nci.nih.gov/chemical/structure/{encoded_smiles}/iupac_name"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=4) as response:
+        with urllib.request.urlopen(req, timeout=3) as response:
             return response.read().decode('utf-8')
     except Exception:
-        return "IUPAC translation unavailable (Network/API Timeout)"
+        return "IUPAC translation unavailable (Network Timeout)"
 
-def calculate_adme_descriptors(smiles):
+def calculate_advanced_adme(smiles):
     mol = Chem.MolFromSmiles(smiles)
-    if not mol:
-        return None
-    return {
-        "MW": Descriptors.MolWt(mol),
-        "LogP": Descriptors.MolLogP(mol),
-        "HBD": Descriptors.NumHDonors(mol),
-        "HBA": Descriptors.NumHAcceptors(mol),
-        "TPSA": Descriptors.TPSA(mol)
-    }
-
-def generate_interactive_boiled_egg(tpsa, logp, variant_name):
-    if not PLOTLY_AVAILABLE: return None
+    if not mol: return None
+    mol = Chem.AddHs(mol)
     
-    fig = go.Figure()
-
-    # Draw the HIA (White Egg) - Gastrointestinal Absorption
-    fig.add_shape(type="circle",
-        x0=0, y0=-2.5, x1=140, y1=6.5,
-        fillcolor="white", line_color="gray", opacity=0.8, layer="below"
-    )
-    # Draw the BBB (Yellow Yolk) - Blood-Brain Barrier Penetration
-    fig.add_shape(type="circle",
-        x0=15, y0=0, x1=90, y1=5,
-        fillcolor="gold", line_color="orange", opacity=0.9, layer="below"
-    )
-
-    # Plot the specific derivative molecule
-    fig.add_trace(go.Scatter(
-        x=[tpsa], y=[logp],
-        mode='markers+text',
-        marker=dict(size=14, color='red', line=dict(width=2, color='darkred')),
-        name=variant_name,
-        text=[variant_name],
-        textposition="top center",
-        hovertemplate="TPSA: %{x}<br>WLOGP: %{y}<extra></extra>"
-    ))
-
-    # Add custom background annotations
-    fig.add_annotation(x=120, y=5.5, text="HIA+ (GI Absorption)", showarrow=False, font=dict(color="gray"))
-    fig.add_annotation(x=52, y=2.5, text="BBB+ (Brain Penetrant)", showarrow=False, font=dict(color="black"))
-
-    fig.update_layout(
-        title="Interactive BOILED-Egg Pharmacokinetics Map",
-        xaxis_title="TPSA (Topological Polar Surface Area) Å²",
-        yaxis_title="WLOGP (Lipophilicity)",
-        plot_bgcolor='rgb(245, 245, 250)',
-        width=700, height=450,
-        xaxis=dict(range=[-10, 160], showgrid=False),
-        yaxis=dict(range=[-4, 8], showgrid=False),
-        margin=dict(l=20, r=20, t=50, b=20)
-    )
-    return fig
+    # Standard Lipinski Descriptors
+    mw = Descriptors.MolWt(mol)
+    logp = Descriptors.MolLogP(mol)
+    hbd = Descriptors.NumHDonors(mol)
+    hba = Descriptors.NumHAcceptors(mol)
+    tpsa = Descriptors.TPSA(mol)
+    
+    # Ring Systems
+    ring_info = mol.GetRingInfo().AtomRings()
+    max_ring = max([len(r) for r in ring_info]) if ring_info else 0
+    
+    # Volume (3D Approximation)
+    try:
+        temp_mol = Chem.Mol(mol)
+        AllChem.EmbedMolecule(temp_mol, randomSeed=42)
+        vol = AllChem.ComputeMolVolume(temp_mol)
+    except:
+        vol = mw * 0.88  # Heuristic fallback if embedding fails
+        
+    # Heuristic pKa Predictions (Inspired by ADMET 3.0 models)
+    acidic_pka = "Neutral (None)"
+    if mol.HasSubstructMatch(Chem.MolFromSmarts("C(=O)[OH]")): acidic_pka = "Acidic (~4.5)"
+    elif mol.HasSubstructMatch(Chem.MolFromSmarts("c[OH]")): acidic_pka = "Weak Acid (~9.5)"
+    
+    basic_pka = "Neutral (None)"
+    if mol.HasSubstructMatch(Chem.MolFromSmarts("[NX3;H2,H1;!$(NC=O)]")): basic_pka = "Basic (~9.0)"
+    elif mol.HasSubstructMatch(Chem.MolFromSmarts("cN")): basic_pka = "Weak Base (~4.0)"
+    
+    # Heuristic Thermodynamic Predictions (MP/BP based on MW, Rotatable bonds, and H-bonds)
+    rot_bonds = Descriptors.NumRotatableBonds(mol)
+    est_mp = max(20.0, (mw * 0.4) + (hbd * 25.0) - (rot_bonds * 5.0))
+    est_bp = est_mp + 150.0 + (mw * 0.5)
+    
+    # Permeability Classification
+    hia = (tpsa < 132) and (-2.0 < logp < 6.0)
+    bbb = (tpsa < 79) and (0.4 < logp < 6.0)
+    
+    if bbb: perm = "High BBB Penetration & GI Absorption"
+    elif hia: perm = "Good GI Absorption (No BBB Penetration)"
+    else: perm = "Poor Absorption / Impermeable"
+    
+    return {
+        "MW": mw, "LogP": logp, "HBD": hbd, "HBA": hba, "TPSA": tpsa,
+        "MaxRing": max_ring, "Volume": vol, "pKa_Acid": acidic_pka,
+        "pKa_Base": basic_pka, "MP": est_mp, "BP": est_bp, "Permeability": perm,
+        "BBB": bbb, "HIA": hia
+    }
 
 
 # --- APPLICATION SETUP ---
@@ -453,64 +443,82 @@ with col_visuals:
             st.line_chart(chart_df, height=220)
             
             # =====================================================================
-            # --- NEW ADME & DRUG-LIKENESS PROFILING SECTION ---
+            # --- NEW ADME 3.0 & PHARMACOKINETICS PROFILING SECTION ---
             # =====================================================================
             st.write("---")
-            st.header("🧬 5. ADME & Pharmacokinetics Analysis")
+            st.header("🧬 5. ADMET 3.0 Pharmacokinetics Analysis")
             
             with st.spinner("Calculating physiochemical parameters and mapping structural matrix..."):
                 current_smiles = str(selected_row["Redesigned SMILES"])
+                parent_smiles = st.session_state.rd_parent_smiles
                 
                 # Retrieve IUPAC Name
                 iupac_name = get_iupac_name(current_smiles)
-                st.write(f"**Automated IUPAC Nomenclature:** `{iupac_name}`")
+                st.info(f"**Automated IUPAC Nomenclature:** `{iupac_name}`")
                 
-                st.write("---")
-                st.subheader("Lipinski's Rule of 5 Evaluation")
+                with st.expander("📖 View ADMET Parameter Dictionary & Ideals", expanded=False):
+                    st.markdown("""
+                    * **TPSA (Topological Polar Surface Area):** Measures the surface sum over all polar atoms (oxygen, nitrogen, attached hydrogens). Critical for estimating cell permeability. *Limit: ≤ 132 Å² for Intestinal Absorption, ≤ 79 Å² for Brain Penetration.*
+                    * **Volume (Å³):** The 3D spatial requirement of the molecule. Important for steric fit within a protein binding pocket. *Ideal Limit: 500 - 900 Å³.*
+                    * **MaxRing:** The size of the largest macrocyclic ring in the structure. Affects structural rigidity. *Ideal Limit: ≤ 7 (unless targeting macrocycle-specific sites).*
+                    * **pKa (Acid/Base):** Predicts the ionization state at physiological pH (7.4). Determines aqueous solubility vs lipid permeability.
+                    * **Melting Point (MP) / Boiling Point (BP):** Thermodynamic indicators of crystalline lattice energy. *High MP (> 200°C)* generally correlates with poor aqueous solubility.
+                    """)
                 
-                adme = calculate_adme_descriptors(current_smiles)
-                if adme:
-                    col1, col2, col3, col4 = st.columns(4)
+                adme_parent = calculate_advanced_adme(parent_smiles)
+                adme_variant = calculate_advanced_adme(current_smiles)
+                
+                if adme_parent and adme_variant:
+                    st.write("#### 📊 Molecular Property Comparative Matrix")
                     
-                    mw_pass = adme['MW'] <= 500
-                    logp_pass = adme['LogP'] <= 5
-                    hbd_pass = adme['HBD'] <= 5
-                    hba_pass = adme['HBA'] <= 10
+                    comp_df = pd.DataFrame({
+                        "Parameter": [
+                            "Permeability Profile", "TPSA (Å²)", "Molecular Volume (Å³)", 
+                            "Max Ring Size", "pKa (Acidic)", "pKa (Basic)", 
+                            "Est. Melting Point (°C)", "Est. Boiling Point (°C)",
+                            "Lipinski Lipophilicity (LogP)"
+                        ],
+                        "Original Lead": [
+                            adme_parent['Permeability'], f"{adme_parent['TPSA']:.2f}", f"{adme_parent['Volume']:.1f}",
+                            adme_parent['MaxRing'], adme_parent['pKa_Acid'], adme_parent['pKa_Base'],
+                            f"{adme_parent['MP']:.1f}", f"{adme_parent['BP']:.1f}", f"{adme_parent['LogP']:.2f}"
+                        ],
+                        "Redesigned Variant": [
+                            adme_variant['Permeability'], f"{adme_variant['TPSA']:.2f}", f"{adme_variant['Volume']:.1f}",
+                            adme_variant['MaxRing'], adme_variant['pKa_Acid'], adme_variant['pKa_Base'],
+                            f"{adme_variant['MP']:.1f}", f"{adme_variant['BP']:.1f}", f"{adme_variant['LogP']:.2f}"
+                        ]
+                    })
+                    st.dataframe(comp_df, hide_index=True, use_container_width=True)
+
+                    # --- Dynamic AI Comparative Statement ---
+                    st.write("#### 🤖 AI Structural Shift Summary")
                     
-                    col1.metric("Molecular Weight", f"{adme['MW']:.2f}", "Pass (≤ 500)" if mw_pass else "Fail (> 500)", delta_color="normal" if mw_pass else "inverse")
-                    col2.metric("Lipophilicity (LogP)", f"{adme['LogP']:.2f}", "Pass (≤ 5)" if logp_pass else "Fail (> 5)", delta_color="normal" if logp_pass else "inverse")
-                    col3.metric("H-Bond Donors", f"{adme['HBD']}", "Pass (≤ 5)" if hbd_pass else "Fail (> 5)", delta_color="normal" if hbd_pass else "inverse")
-                    col4.metric("H-Bond Acceptors", f"{adme['HBA']}", "Pass (≤ 10)" if hba_pass else "Fail (> 10)", delta_color="normal" if hba_pass else "inverse")
+                    tpsa_shift = adme_variant['TPSA'] - adme_parent['TPSA']
+                    vol_shift = adme_variant['Volume'] - adme_parent['Volume']
+                    logp_shift = adme_variant['LogP'] - adme_parent['LogP']
                     
-                    violations = sum([not mw_pass, not logp_pass, not hbd_pass, not hba_pass])
-                    if violations == 0:
-                        st.success("✅ **0 Violations:** High probability of excellent oral bioavailability.")
-                    elif violations == 1:
-                        st.warning("⚠️ **1 Violation:** Borderline oral bioavailability.")
+                    shift_text = f"The structural redesign resulted in a volumetric expansion of **{abs(vol_shift):.1f} Å³**. "
+                    
+                    if tpsa_shift > 0: shift_text += f"The addition of polar elements increased the Topological Polar Surface Area (TPSA) by **{tpsa_shift:.1f} Å²**. "
+                    elif tpsa_shift < 0: shift_text += f"The modification reduced overall polarity, decreasing TPSA by **{abs(tpsa_shift):.1f} Å²**. "
+                    
+                    if adme_parent['BBB'] and not adme_variant['BBB']:
+                        shift_text += "Critically, this modification **restricted the molecule from crossing the Blood-Brain Barrier (BBB)**, shifting it to GI-specific absorption. "
+                    elif not adme_parent['BBB'] and adme_variant['BBB']:
+                        shift_text += "Critically, this modification **unlocked Blood-Brain Barrier (BBB) permeability**, allowing central nervous system targeting. "
+                    elif adme_variant['BBB']:
+                        shift_text += "The molecule successfully **retained its ability to cross the Blood-Brain Barrier (BBB)**. "
+                    elif adme_variant['HIA']:
+                        shift_text += "The molecule remains restricted from the brain but **retains excellent Gastrointestinal (GI) absorption**. "
                     else:
-                        st.error(f"❌ **{violations} Violations:** Poor predicted oral bioavailability.")
+                        shift_text += "The current modifications have unfortunately rendered the molecule **impermeable to both GI and BBB** barriers. "
                         
-                st.write("---")
-                st.subheader("Interactive BOILED-Egg Prediction Matrix")
-                
-                if PLOTLY_AVAILABLE and adme:
-                    fig = generate_interactive_boiled_egg(adme['TPSA'], adme['LogP'], str(selected_row["Variant ID"]))
-                    if fig:
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Pharmacokinetic Prediction Rules based on regions
-                        in_hia = (adme['TPSA'] < 132) and (adme['LogP'] > -2.0) and (adme['LogP'] < 6.0)
-                        in_bbb = (adme['TPSA'] < 79) and (adme['LogP'] > 0.4) and (adme['LogP'] < 6.0)
-                        
-                        if in_bbb:
-                            st.info("🧠 **AI Assessment:** Molecule falls in the Yolk zone (BBB+). High probability of crossing the Blood-Brain Barrier and active Gastrointestinal absorption.")
-                        elif in_hia:
-                            st.success("🩸 **AI Assessment:** Molecule falls in the White zone (HIA+). Good Gastrointestinal absorption but restricted from crossing the Blood-Brain Barrier.")
-                        else:
-                            st.error("📉 **AI Assessment:** Molecule falls outside ideal parameters. Poor Gastrointestinal absorption and poor brain penetration predicted.")
-                else:
-                    st.info("💡 **Visualization requires Plotly:** Please install Plotly via `pip install plotly` to view the interactive BOILED-Egg diagram.")
-            
+                    if logp_shift > 0.5: shift_text += "Finally, a significant increase in lipophilicity (LogP) was observed, which may require formulation with lipid-based delivery systems to offset poor aqueous solubility."
+                    elif logp_shift < -0.5: shift_text += "Furthermore, lipophilicity (LogP) was reduced, which is predicted to significantly improve aqueous solubility for oral formulation."
+                    
+                    st.success(shift_text)
+
             # =====================================================================
             # --- HIDDEN DOCKING SECTION ---
             # The following UI block has been commented out to remain invisible 
