@@ -1,29 +1,20 @@
 import streamlit as st
 import os
 import urllib.request
+import urllib.parse
 import numpy as np
 import pandas as pd
 import base64
 import io
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
-from rdkit.Geometry import Point3D
 
-# --- LIVE HARDWARE-ACCELERATED 3D RENDER INTERFACE LAYER ---
+# --- INTERACTIVE VISUALS CHECK ---
 try:
-    import py3Dmol
-    from stmol import showmol
-    STMOL_AVAILABLE = True
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
 except ImportError:
-    STMOL_AVAILABLE = False
-
-# --- AUTODOCK VINA INTEGRATION CHECK ---
-try:
-    from vina import Vina
-    from meeko import MoleculePreparation
-    VINA_AVAILABLE = True
-except ImportError:
-    VINA_AVAILABLE = False
+    PLOTLY_AVAILABLE = False
 
 # --- INITIALIZATION SAFETY WRAPPER ---
 def initialize_session():
@@ -32,7 +23,6 @@ def initialize_session():
         "rd_ligand": None,
         "rd_parent_smiles": None,
         "rd_library": None,
-        "docking_results": None,
         "protein_parsed": False,
         "ligand_parsed": False
     }
@@ -69,126 +59,6 @@ def generate_pdb_string_from_smiles(smiles_str):
     except Exception:
         pass
     return None
-
-# --- PHYSICAL TELEPORTATION ENGINE ---
-def generate_pocket_centered_pdb(smiles_str, cx, cy, cz, pose_offset=0):
-    if not smiles_str: return None
-    try:
-        mol = Chem.MolFromSmiles(smiles_str)
-        if mol:
-            Chem.SanitizeMol(mol)
-            mol = Chem.AddHs(mol)
-            params = AllChem.ETKDGv3()
-            params.useRandomCoords = True
-            if AllChem.EmbedMolecule(mol, params) >= 0:
-                AllChem.MMFFOptimizeMolecule(mol)
-                
-                conf = mol.GetConformer()
-                coords = conf.GetPositions()
-                center = np.mean(coords, axis=0)
-                
-                shift_x = (cx + (pose_offset * 0.8)) - center[0]
-                shift_y = (cy + (pose_offset * 0.5)) - center[1]
-                shift_z = cz - center[2]
-                
-                for i in range(mol.GetNumAtoms()):
-                    pos = conf.GetAtomPosition(i)
-                    conf.SetAtomPosition(i, Point3D(pos.x + shift_x, pos.y + shift_y, pos.z + shift_z))
-                    
-                return Chem.MolToPDBBlock(mol)
-    except Exception:
-        pass
-    return None
-
-def auto_detect_heteroatom_center(pdb_path):
-    coords = []
-    if pdb_path and os.path.exists(pdb_path):
-        with open(pdb_path, "r") as f:
-            for line in f:
-                if line.startswith("HETATM") and "HOH" not in line:
-                    try:
-                        x = float(line[30:38].strip())
-                        y = float(line[38:46].strip())
-                        z = float(line[46:54].strip())
-                        coords.append((x, y, z))
-                    except ValueError:
-                        continue
-    if coords:
-        mean_coords = np.mean(coords, axis=0)
-        return round(mean_coords[0], 3), round(mean_coords[1], 3), round(mean_coords[2], 3)
-    return 0.0, 0.0, 0.0
-
-def run_true_vina_docking_pose(smiles, receptor_path, cx, cy, cz, box_size, pose_idx):
-    real_residues = []
-    if receptor_path and os.path.exists(receptor_path):
-        try:
-            with open(receptor_path, "r") as f:
-                for line in f:
-                    if line.startswith("ATOM  "):
-                        res_name = line[17:20].strip()
-                        res_num = line[22:26].strip()
-                        x = float(line[30:38].strip())
-                        y = float(line[38:46].strip())
-                        z = float(line[46:54].strip())
-                        dist = np.sqrt((x-cx)**2 + (y-cy)**2 + (z-cz)**2)
-                        if dist <= 14.0:
-                            label = f"{res_name}-{res_num}"
-                            if label not in real_residues:
-                                real_residues.append(label)
-        except Exception:
-            pass
-            
-    if not real_residues:
-        real_residues = ["ILE-84", "VAL-112", "TYR-40", "MET-92", "PHE-150"]
-
-    if not VINA_AVAILABLE:
-        try:
-            mol = Chem.MolFromSmiles(smiles)
-            if not mol: return -5.0 - (pose_idx * 0.4), real_residues[0], "Steric Interaction"
-            mw = Descriptors.MolWt(mol)
-            logp = Descriptors.MolLogP(mol)
-            hbd = Descriptors.NumHDonors(mol)
-            
-            affinity = -4.8 - (mw * 0.012) - (abs(logp) * 0.24) - (pose_idx * 0.32)
-            res_call = real_residues[(int(mw) + pose_idx) % len(real_residues)]
-            
-            res_prefix = res_call.split("-")[0]
-            if res_prefix in ["PHE", "TYR", "TRP"]:
-                bond_call = "Pi-Stacking Interaction"
-            elif res_prefix in ["LEU", "ILE", "VAL", "ALA", "MET"]:
-                bond_call = "Hydrophobic Interaction"
-            elif res_prefix in ["SER", "THR", "ASN", "GLN", "ASP", "GLU", "LYS", "ARG", "HIS"]:
-                bond_call = "Hydrogen Bonding" if hbd > 0 else "Van der Waals Force"
-            else:
-                bond_call = "Hydrophobic Contact"
-                
-            return round(max(-12.0, affinity), 2), res_call, bond_call
-        except Exception:
-            return -5.5, real_residues[0], "Hydrophobic"
-
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        mol = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol)
-        AllChem.MMFFOptimizeMolecule(mol)
-        
-        prep = MoleculePreparation()
-        prep.prepare(mol[0])
-        ligand_pdbqt = prep.write_pdbqt_string()
-        
-        v = Vina(sf_name='vina')
-        v.set_receptor(receptor_path)
-        v.set_ligand_from_string(ligand_pdbqt)
-        v.compute_vina_maps(center=[cx, cy, cz], box_size=[box_size, box_size, box_size])
-        
-        v.dock(exhaustiveness=8, n_poses=5)
-        energies = v.energies(n_poses=5)
-        
-        res_call = real_residues[pose_idx % len(real_residues)]
-        bond_types = ["Hydrogen Bonding", "Hydrophobic Interaction", "Pi-Stacking", "Van der Waals Force"]
-        return round(energies[pose_idx][0], 2), res_call, bond_types[pose_idx % 4]
-    except Exception:
-        return -5.5 - (pose_idx * 0.3), real_residues[0], "Van der Waals Force"
 
 def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
     try:
@@ -346,6 +216,75 @@ def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
     return derived_library
 
 
+# --- ADME & PHARMACOKINETICS ENGINE ---
+
+def get_iupac_name(smiles):
+    try:
+        # Pinging NIH CACTUS database for automated nomenclature translation
+        encoded_smiles = urllib.parse.quote(smiles, safe='')
+        url = f"https://cactus.nci.nih.gov/chemical/structure/{encoded_smiles}/iupac_name"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as response:
+            return response.read().decode('utf-8')
+    except Exception:
+        return "IUPAC translation unavailable (Network/API Timeout)"
+
+def calculate_adme_descriptors(smiles):
+    mol = Chem.MolFromSmiles(smiles)
+    if not mol:
+        return None
+    return {
+        "MW": Descriptors.MolWt(mol),
+        "LogP": Descriptors.MolLogP(mol),
+        "HBD": Descriptors.NumHDonors(mol),
+        "HBA": Descriptors.NumHAcceptors(mol),
+        "TPSA": Descriptors.TPSA(mol)
+    }
+
+def generate_interactive_boiled_egg(tpsa, logp, variant_name):
+    if not PLOTLY_AVAILABLE: return None
+    
+    fig = go.Figure()
+
+    # Draw the HIA (White Egg) - Gastrointestinal Absorption
+    fig.add_shape(type="circle",
+        x0=0, y0=-2.5, x1=140, y1=6.5,
+        fillcolor="white", line_color="gray", opacity=0.8, layer="below"
+    )
+    # Draw the BBB (Yellow Yolk) - Blood-Brain Barrier Penetration
+    fig.add_shape(type="circle",
+        x0=15, y0=0, x1=90, y1=5,
+        fillcolor="gold", line_color="orange", opacity=0.9, layer="below"
+    )
+
+    # Plot the specific derivative molecule
+    fig.add_trace(go.Scatter(
+        x=[tpsa], y=[logp],
+        mode='markers+text',
+        marker=dict(size=14, color='red', line=dict(width=2, color='darkred')),
+        name=variant_name,
+        text=[variant_name],
+        textposition="top center",
+        hovertemplate="TPSA: %{x}<br>WLOGP: %{y}<extra></extra>"
+    ))
+
+    # Add custom background annotations
+    fig.add_annotation(x=120, y=5.5, text="HIA+ (GI Absorption)", showarrow=False, font=dict(color="gray"))
+    fig.add_annotation(x=52, y=2.5, text="BBB+ (Brain Penetrant)", showarrow=False, font=dict(color="black"))
+
+    fig.update_layout(
+        title="Interactive BOILED-Egg Pharmacokinetics Map",
+        xaxis_title="TPSA (Topological Polar Surface Area) Å²",
+        yaxis_title="WLOGP (Lipophilicity)",
+        plot_bgcolor='rgb(245, 245, 250)',
+        width=700, height=450,
+        xaxis=dict(range=[-10, 160], showgrid=False),
+        yaxis=dict(range=[-4, 8], showgrid=False),
+        margin=dict(l=20, r=20, t=50, b=20)
+    )
+    return fig
+
+
 # --- APPLICATION SETUP ---
 st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
 st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
@@ -358,7 +297,7 @@ if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_con
 
 engine_mode = st.radio(
     "Select Optimization Processing Mode:",
-    ["MockFrag' Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"],
+    ["MockFrag Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"],
     horizontal=True
 )
 st.write("---")
@@ -455,7 +394,6 @@ with col_params:
         show_labels = st.toggle("🔍 Show Atom Index Numbers on Structure", value=True)
         base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles, include_labels=show_labels, zoom_level=600)
         
-        # Using markdown with unsafe_allow_html for better compatibility with older Streamlit versions
         if base_img: st.markdown(base_img, unsafe_allow_html=True)
         
         if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
@@ -515,13 +453,72 @@ with col_visuals:
             st.line_chart(chart_df, height=220)
             
             # =====================================================================
+            # --- NEW ADME & DRUG-LIKENESS PROFILING SECTION ---
+            # =====================================================================
+            st.write("---")
+            st.header("🧬 5. ADME & Pharmacokinetics Analysis")
+            
+            with st.spinner("Calculating physiochemical parameters and mapping structural matrix..."):
+                current_smiles = str(selected_row["Redesigned SMILES"])
+                
+                # Retrieve IUPAC Name
+                iupac_name = get_iupac_name(current_smiles)
+                st.write(f"**Automated IUPAC Nomenclature:** `{iupac_name}`")
+                
+                st.write("---")
+                st.subheader("Lipinski's Rule of 5 Evaluation")
+                
+                adme = calculate_adme_descriptors(current_smiles)
+                if adme:
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    mw_pass = adme['MW'] <= 500
+                    logp_pass = adme['LogP'] <= 5
+                    hbd_pass = adme['HBD'] <= 5
+                    hba_pass = adme['HBA'] <= 10
+                    
+                    col1.metric("Molecular Weight", f"{adme['MW']:.2f}", "Pass (≤ 500)" if mw_pass else "Fail (> 500)", delta_color="normal" if mw_pass else "inverse")
+                    col2.metric("Lipophilicity (LogP)", f"{adme['LogP']:.2f}", "Pass (≤ 5)" if logp_pass else "Fail (> 5)", delta_color="normal" if logp_pass else "inverse")
+                    col3.metric("H-Bond Donors", f"{adme['HBD']}", "Pass (≤ 5)" if hbd_pass else "Fail (> 5)", delta_color="normal" if hbd_pass else "inverse")
+                    col4.metric("H-Bond Acceptors", f"{adme['HBA']}", "Pass (≤ 10)" if hba_pass else "Fail (> 10)", delta_color="normal" if hba_pass else "inverse")
+                    
+                    violations = sum([not mw_pass, not logp_pass, not hbd_pass, not hba_pass])
+                    if violations == 0:
+                        st.success("✅ **0 Violations:** High probability of excellent oral bioavailability.")
+                    elif violations == 1:
+                        st.warning("⚠️ **1 Violation:** Borderline oral bioavailability.")
+                    else:
+                        st.error(f"❌ **{violations} Violations:** Poor predicted oral bioavailability.")
+                        
+                st.write("---")
+                st.subheader("Interactive BOILED-Egg Prediction Matrix")
+                
+                if PLOTLY_AVAILABLE and adme:
+                    fig = generate_interactive_boiled_egg(adme['TPSA'], adme['LogP'], str(selected_row["Variant ID"]))
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Pharmacokinetic Prediction Rules based on regions
+                        in_hia = (adme['TPSA'] < 132) and (adme['LogP'] > -2.0) and (adme['LogP'] < 6.0)
+                        in_bbb = (adme['TPSA'] < 79) and (adme['LogP'] > 0.4) and (adme['LogP'] < 6.0)
+                        
+                        if in_bbb:
+                            st.info("🧠 **AI Assessment:** Molecule falls in the Yolk zone (BBB+). High probability of crossing the Blood-Brain Barrier and active Gastrointestinal absorption.")
+                        elif in_hia:
+                            st.success("🩸 **AI Assessment:** Molecule falls in the White zone (HIA+). Good Gastrointestinal absorption but restricted from crossing the Blood-Brain Barrier.")
+                        else:
+                            st.error("📉 **AI Assessment:** Molecule falls outside ideal parameters. Poor Gastrointestinal absorption and poor brain penetration predicted.")
+                else:
+                    st.info("💡 **Visualization requires Plotly:** Please install Plotly via `pip install plotly` to view the interactive BOILED-Egg diagram.")
+            
+            # =====================================================================
             # --- HIDDEN DOCKING SECTION ---
             # The following UI block has been commented out to remain invisible 
             # while keeping the original logic completely intact within the file.
             # =====================================================================
             
             # st.write("---")
-            # st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
+            # st.header("🚀 6. Advanced Native Multi-Pose Docking Matrix")
             # 
             # det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
             # 
