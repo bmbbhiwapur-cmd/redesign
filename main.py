@@ -472,7 +472,7 @@ def generate_html_report(engine_mode, protein_id, protein_meta, parent_smiles, r
 
 # --- APPLICATION SETUP ---
 st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
-st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
+st.title("🧬 InSilico BioSphere Small-Molecule Redesign Studio")
 st.markdown("**InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India")
 
 if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
