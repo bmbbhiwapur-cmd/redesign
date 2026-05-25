@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import base64
 import io
+import matplotlib.pyplot as plt
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
 
@@ -17,7 +18,8 @@ def initialize_session():
         "rd_parent_smiles": None,
         "rd_library": None,
         "protein_parsed": False,
-        "ligand_parsed": False
+        "ligand_parsed": False,
+        "protein_metadata": {}
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -36,6 +38,40 @@ def fetch_pdb_from_rcsb(pdb_id):
         return True, local_pdb
     except Exception:
         return False, f"Could not find or download PDB ID '{pdb_id.upper()}'."
+
+def extract_pdb_metadata(file_path):
+    meta = {
+        "Classification": "Not specified",
+        "Organism": "Not specified",
+        "Expression System": "Not specified",
+        "Method": "Not specified",
+        "Resolution": "Not specified"
+    }
+    if not os.path.exists(file_path): return meta
+    
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if line.startswith("HEADER"):
+                    meta["Classification"] = line[10:50].strip()
+                elif line.startswith("EXPDTA"):
+                    meta["Method"] = line[10:].strip()
+                elif line.startswith("REMARK   2 RESOLUTION."):
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        meta["Resolution"] = f"{parts[3]} Å"
+                elif line.startswith("SOURCE"):
+                    if "ORGANISM_SCIENTIFIC:" in line:
+                        meta["Organism"] = line.split("ORGANISM_SCIENTIFIC:")[1].split(";")[0].strip()
+                    if "EXPRESSION_SYSTEM:" in line:
+                        meta["Expression System"] = line.split("EXPRESSION_SYSTEM:")[1].split(";")[0].strip()
+                
+                # Stop parsing once we hit atoms to save processing time
+                if line.startswith("ATOM") or line.startswith("HETATM"):
+                    break
+    except Exception:
+        pass
+    return meta
 
 def generate_pdb_string_from_smiles(smiles_str):
     if not smiles_str: return None
@@ -59,7 +95,7 @@ def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
         if mol:
             mol_to_draw = Chem.RemoveHs(mol)
             if include_labels:
-                for atom in mol_to_draw_GetAtoms():
+                for atom in mol_to_draw.GetAtoms():
                     atom.SetProp('atomNote', str(atom.GetIdx()))
             img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)))
             buffered = io.BytesIO()
@@ -69,6 +105,30 @@ def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
     except Exception:
         pass
     return None
+
+def generate_ftir_image(target_peak):
+    wavenumbers = np.linspace(400, 4000, 500)
+    baseline = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
+    effect = 40.0 * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
+    transmittance = np.clip(baseline - effect, 5.0, 100.0)
+
+    fig, ax = plt.subplots(figsize=(8, 3.5))
+    ax.plot(wavenumbers, transmittance, color='#1e3c72', linewidth=2)
+    ax.set_xlim(4000, 400)  # Standard FTIR x-axis is inverted
+    ax.set_ylim(0, 105)
+    ax.set_xlabel("Wavenumber (cm⁻¹)")
+    ax.set_ylabel("Transmittance (%)")
+    ax.grid(True, linestyle='--', alpha=0.6)
+    
+    # Fill under the curve slightly for aesthetics
+    ax.fill_between(wavenumbers, transmittance, 105, color='#1e3c72', alpha=0.05)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+    plt.close(fig)
+    img_str = base64.b64encode(buf.getvalue()).decode()
+    return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; border: 1px solid #e2e8f0;"/>'
+
 
 def find_valid_cleavage_sites(smiles_str):
     valid_sites = []
@@ -277,7 +337,7 @@ def calculate_advanced_adme(smiles):
     }
 
 # --- REPORT EXPORT MODULE ---
-def generate_html_report(engine_mode, protein_id, parent_smiles, reaction_mode, library_df, selected_row, iupac_name, comp_df, shift_summary, parent_img, variant_img):
+def generate_html_report(engine_mode, protein_id, protein_meta, parent_smiles, reaction_mode, library_df, selected_row, iupac_name, comp_df, shift_summary, parent_img, variant_img, ftir_img):
     html_template = f"""
     <!DOCTYPE html>
     <html>
@@ -289,19 +349,20 @@ def generate_html_report(engine_mode, protein_id, parent_smiles, reaction_mode, 
             .header-banner {{ background: linear-gradient(135deg, #1e3c72, #2a5298); color: white; padding: 25px; border-bottom: 5px solid #00c6ff; text-align: center; position: relative; }}
             .header-banner h1 {{ margin: 0; font-size: 28px; letter-spacing: 1px; }}
             .header-banner p {{ margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }}
-            .copyright-header {{ font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: rgba(255,255,255,0.7); margin-bottom: 10px; }}
+            .copyright-header {{ font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: rgba(255,255,255,0.7); margin-bottom: 10px; display: block; }}
             .container {{ max-width: 1000px; margin: 30px auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }}
             h2 {{ color: #1e3c72; border-bottom: 2px solid #eef2f7; padding-bottom: 8px; margin-top: 35px; font-size: 20px; }}
             h3 {{ color: #2a5298; font-size: 16px; margin-top: 20px; }}
             .meta-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; background: #f4f7f6; padding: 20px; border-radius: 8px; }}
             .meta-item {{ font-size: 14px; }}
             .meta-item strong {{ color: #1e3c72; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }}
-            table, th, td {{ border: 1px solid #e2e8f0; }}
-            th {{ background-color: #f8fafc; color: #1e3c72; padding: 12px; text-align: left; font-weight: 600; }}
-            td {{ padding: 12px; vertical-align: middle; }}
+            .table-wrapper {{ overflow-x: auto; margin: 20px 0; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }}
+            table {{ width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }}
+            th, td {{ border: 1px solid #e2e8f0; padding: 10px; text-align: left; }}
+            th {{ background-color: #f8fafc; color: #1e3c72; font-weight: 600; position: sticky; top: 0; }}
+            td {{ word-wrap: break-word; }}
             .structure-box {{ display: flex; gap: 30px; margin: 20px 0; background: #fafafa; padding: 20px; border-radius: 8px; border: 1px solid #eef2f7; align-items: center; }}
-            .structure-img {{ background: white; padding: 10px; border: 1px solid #e2e8f0; border-radius: 6px; max-width: 320px; }}
+            .structure-img {{ background: white; padding: 10px; border: 1px solid #e2e8f0; border-radius: 6px; max-width: 320px; text-align: center; }}
             .scandata {{ font-family: monospace; background: #f1f5f9; padding: 3px 6px; border-radius: 4px; font-size: 13px; word-break: break-all; }}
             .summary-card {{ background-color: #ecfdf5; border-left: 5px solid #10b981; padding: 20px; border-radius: 6px; margin: 25px 0; color: #065f46; font-size: 14.5px; }}
             .dictionary-box {{ background-color: #f8fafc; padding: 20px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 13px; }}
@@ -310,7 +371,7 @@ def generate_html_report(engine_mode, protein_id, parent_smiles, reaction_mode, 
     </head>
     <body>
         <div class="header-banner">
-            <div class="copyright-header">copyright@sarang dhote</div>
+            <span class="copyright-header">copyright@sarang dhote</span>
             <h1>🧬 InSilico BioSphere</h1>
             <p>Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry</p>
             <p>Shivaji Science College, Nagpur, Maharashtra, India | Contact: sarangresearch@gmail.com</p>
@@ -320,22 +381,33 @@ def generate_html_report(engine_mode, protein_id, parent_smiles, reaction_mode, 
             <h2>1. Studio Configuration & Environment Setup</h2>
             <div class="meta-grid">
                 <div class="meta-item"><strong>Optimization Processing Mode:</strong> {engine_mode}</div>
-                <div class="meta-item"><strong>Target Protein ID Matrix:</strong> {protein_id}</div>
+                <div class="meta-item"><strong>Target Protein ID / Source:</strong> {protein_id}</div>
                 <div class="meta-item"><strong>Modification Mechanism Vector:</strong> {reaction_mode}</div>
                 <div class="meta-item"><strong>Parent Query Template:</strong> <span class="scandata">{parent_smiles}</span></div>
             </div>
             
+            <h3>Target Protein Metadata Matrix</h3>
+            <div class="meta-grid" style="background: #f8fafc;">
+                <div class="meta-item"><strong>Classification:</strong> {protein_meta.get('Classification', 'N/A')}</div>
+                <div class="meta-item"><strong>Organism:</strong> {protein_meta.get('Organism', 'N/A')}</div>
+                <div class="meta-item"><strong>Expression System:</strong> {protein_meta.get('Expression System', 'N/A')}</div>
+                <div class="meta-item"><strong>Method:</strong> {protein_meta.get('Method', 'N/A')}</div>
+                <div class="meta-item" style="grid-column: span 2;"><strong>Resolution:</strong> {protein_meta.get('Resolution', 'N/A')}</div>
+            </div>
+            
             <div class="structure-box">
-                <div>{parent_img}</div>
+                <div class="structure-img">{parent_img}</div>
                 <div>
-                    <strong>Phytochemical Lead Template Profile:</strong><br>
-                    Initial structural parameters parsed successfully. Standard 2D coordinate matrix compiled mapping atom distribution maps prior to modification arrays.
+                    <strong>Phytochemical Lead Template Profile:</strong><br><br>
+                    Initial structural parameters parsed successfully. Standard 2D coordinate matrix compiled mapping atom distribution vectors prior to modification arrays.
                 </div>
             </div>
 
             <h2>2. Screening Array & Workspace Viewport</h2>
             <p>Complete algorithmic optimization library tracking modifications parsed during structural operations:</p>
-            {library_df.to_html(index=False, classes='table')}
+            <div class="table-wrapper">
+                {library_df.to_html(index=False, classes='table')}
+            </div>
 
             <h2>3. Selected Redesign Variant Mapping</h2>
             <div class="meta-grid">
@@ -354,13 +426,22 @@ def generate_html_report(engine_mode, protein_id, parent_smiles, reaction_mode, 
                     Predicted Efficiency Yield Tier: <span style="color:#1e3c72; font-weight:bold;">{selected_row['Yield Prediction']}</span>. Pathway coordinates optimized via functional block swapping mechanics.
                 </div>
             </div>
+            
+            <h3>📊 Modeled Vibrational Spectrum Footprint (FTIR)</h3>
+            <div style="text-align: center; margin: 20px 0;">
+                {ftir_img}
+            </div>
 
             <h2>4. ADMET 3.0 Pharmacokinetics Analysis</h2>
             <p><strong>Automated IUPAC Nomenclature Generation:</strong></p>
-            <div class="scandata" style="margin-bottom:20px; background:#e0f2fe; color:#0369a1; padding:10px;">{iupac_name}</div>
+            <div class="scandata" style="margin-bottom:20px; background:#e0f2fe; color:#0369a1; padding:10px; border-left: 4px solid #0284c7;">
+                {iupac_name}
+            </div>
             
             <h3>Molecular Property Comparative Matrix</h3>
-            {comp_df.to_html(index=False, classes='table')}
+            <div class="table-wrapper">
+                {comp_df.to_html(index=False, classes='table')}
+            </div>
 
             <h3>Structural Shift Summary</h3>
             <div class="summary-card">
@@ -413,6 +494,16 @@ with col_params:
     
     if st.session_state.protein_parsed and st.session_state.rd_receptor:
         st.success("🟢 Target Protein Matrix Ready")
+        
+        # Display extracted metadata
+        meta = st.session_state.protein_metadata
+        if meta and meta.get("Classification") != "Not specified":
+            with st.expander("🔬 View Extracted Protein Metadata", expanded=True):
+                st.write(f"**Classification:** {meta.get('Classification')}")
+                st.write(f"**Organism:** {meta.get('Organism')}")
+                st.write(f"**Expression System:** {meta.get('Expression System')}")
+                st.write(f"**Method:** {meta.get('Method')}")
+                st.write(f"**Resolution:** {meta.get('Resolution')}")
             
     protein_mode = st.radio("Protein Input Setup:", ["Download PDB ID", "Upload Local Structure File (.PDB / .PDBQT)"])
     
@@ -422,6 +513,7 @@ with col_params:
             ok, path = fetch_pdb_from_rcsb(pdb_id)
             if ok:
                 st.session_state.rd_receptor = path
+                st.session_state.protein_metadata = extract_pdb_metadata(path)
                 st.session_state.protein_parsed = True
                 st.rerun()
     else:
@@ -431,6 +523,7 @@ with col_params:
             if st.button("📥 Parse Target Vector from File"):
                 with open(path, "wb") as f: f.write(uploaded_rec.getbuffer())
                 st.session_state.rd_receptor = path
+                st.session_state.protein_metadata = extract_pdb_metadata(path)
                 st.session_state.protein_parsed = True
                 st.rerun()
 
@@ -548,13 +641,10 @@ with col_visuals:
             
             st.write("---")
             st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
-            wavenumbers = np.linspace(400, 4000, 500)
-            baseline = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
-            target_peak = int(selected_row["FTIR Peak"])
-            effect = 40.0 * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
             
-            chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
-            st.line_chart(chart_df, height=220)
+            # Generate the image base64 directly from Matplotlib instead of Streamlit line_chart
+            ftir_img_html = generate_ftir_image(int(selected_row["FTIR Peak"]))
+            st.markdown(ftir_img_html, unsafe_allow_html=True)
             
             # =====================================================================
             # --- ADME 3.0 & PHARMACOKINETICS PROFILING SECTION ---
@@ -655,12 +745,16 @@ with col_visuals:
                     st.write("---")
                     st.subheader("📄 Automated Export Infrastructure")
                     
-                    protein_id_label = pdb_id if protein_mode == "Download PDB ID" else str(st.session_state.rd_receptor)
+                    # Resolve Protein ID for Report
+                    if protein_mode == "Download PDB ID" and pdb_id:
+                        protein_id_label = pdb_id.upper()
+                    else:
+                        protein_id_label = "Local Upload: " + str(st.session_state.rd_receptor).replace("rd_rec_", "")
                     
-                    # Prepare data structures specifically for clean printing
                     html_report_content = generate_html_report(
                         engine_mode=str(engine_mode),
                         protein_id=protein_id_label,
+                        protein_meta=st.session_state.protein_metadata,
                         parent_smiles=str(parent_smiles),
                         reaction_mode=str(reaction_mode),
                         library_df=st.session_state.rd_library,
@@ -669,7 +763,8 @@ with col_visuals:
                         comp_df=comp_df,
                         shift_summary=str(shift_text),
                         parent_img=str(base_img),
-                        variant_img=str(highlighted_img_html)
+                        variant_img=str(highlighted_img_html),
+                        ftir_img=str(ftir_img_html)
                     )
                     
                     st.download_button(
