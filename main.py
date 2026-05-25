@@ -98,31 +98,4 @@ def get_dynamic_fragments(parent_smiles):
 
     flavone_smarts = Chem.MolFromSmarts("c1cc(O)cc2c1c(=O)cc(c2)c3ccccc3")
     phenol_count = len(mol.GetSubstructMatches(Chem.MolFromSmarts("c[OH]")))
-    alkaloid_smarts = Chem.MolFromSmarts("[#7;R]")
-    aliphatic_carbons = [a for a in mol.GetAtoms() if a.GetSymbol() == 'C' and not a.GetIsAromatic()]
-    total_carbons = [a for a in mol.GetAtoms() if a.GetSymbol() == 'C']
-    aliphatic_ratio = len(aliphatic_carbons) / len(total_carbons) if total_carbons else 0
-
-    if mol.HasSubstructMatch(flavone_smarts) or phenol_count >= 2:
-        subclass_title = "Polyphenolic Flavonoid Core"
-        fragments = [
-            {"name": "Glucosylation (-C6H11O5)", "smiles": "OC1C(O)C(O)C(O)C(CO)O1", "peak": 3350, "yield": "Moderate Yield (58%)", "route": "Enzymatic glycosylation via Phase II transferase mirroring."},
-            {"name": "Prenylation (-CH2CH=C(CH3)2)", "smiles": "CC(C)=CC", "peak": 1660, "yield": "Good Yield (72%)", "route": "Late-stage electrophilic C-alkylation."},
-            {"name": "O-Methylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Excellent Yield (91%)", "route": "Selective etherification using Dimethyl Sulfate."},
-            {"name": "Acetylation (-OCOCH3)", "smiles": "OC(=O)C", "peak": 1735, "yield": "Good Yield (84%)", "route": "Esterification utilizing Acetic Anhydride."}
-        ]
-    elif mol.HasSubstructMatch(alkaloid_smarts):
-        subclass_title = "Alkaloidal Nitrogen Heterocycle"
-        fragments = [
-            {"name": "N-Alkylation (-CH2CH3)", "smiles": "CC", "peak": 2960, "yield": "Good Yield (80%)", "route": "Nucleophilic substitution at nitrogen nodes using Ethyl Bromide."},
-            {"name": "Quaternization (-CH3+)", "smiles": "C", "peak": 2850, "yield": "Excellent Yield (94%)", "route": "Methylation using Methyl Iodide."},
-            {"name": "Amidation (-COCH3)", "smiles": "C(=O)C", "peak": 1665, "yield": "Good Yield (78%)", "route": "Amide condensation using Acetyl Chloride."},
-            {"name": "N-Oxidation (=O)", "smiles": "[O-]", "peak": 950, "yield": "Moderate Yield (65%)", "route": "Controlled oxidation via mCPBA."}
-        ]
-    elif aliphatic_ratio > 0.65:
-        subclass_title = "Aliphatic Terpenoid Scaffold"
-        fragments = [
-            {"name": "Epoxidation (=O)", "smiles": "O", "peak": 1250, "yield": "Moderate Yield (60%)", "route": "Prilezhaev reaction using mCPBA across isolated alkene bonds."},
-            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3400, "yield": "Poor Yield (42%)", "route": "Allylic C-H functionalization driven by Selenium Dioxide."},
-            {"name": "Ozonolysis Fragmentation", "smiles": "O=C", "peak": 1710, "yield": "Good Yield (70%)", "route": "Oxidative cleavage of double bonds."},
-            {"name": "Esterification (-COOCH3)", "smiles": "C(=O)OC", "peak": 174
+    alkal
