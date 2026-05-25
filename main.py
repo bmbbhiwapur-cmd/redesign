@@ -69,16 +69,16 @@ def generate_labeled_2d_image(smiles_str, highlight_dict=None, legend_text="Loca
 def run_sandbox_engine(target_atom_idx):
     """Returns absolute pre-verified flawless mock structures that can never throw valency errors."""
     mock_data = [
-        {"name": "Methylation (-CH3)", "smiles": "CC(=O)NC1=CC(=C(C)C=C1)O", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions.", "score": 0.92},
-        {"name": "Hydroxylation (-OH)", "smiles": "CC(=O)NC1=CC(=C(O)C=C1)O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis.", "score": 0.88},
-        {"name": "Amination (-NH2)", "smiles": "CC(=O)NC1=CC(=C(N)C=C1)O", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration followed by selective reduction with Pd/C.", "score": 0.85},
-        {"name": "Fluorination (-F)", "smiles": "CC(=O)NC1=CC(=C(F)C=C1)O", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor.", "score": 0.81},
-        {"name": "Trifluoromethylation (-CF3)", "smiles": "CC(=O)NC1=CC(=C(C(F)(F)F)C=C1)O", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using Ruppert-Prakash reagent.", "score": 0.78},
-        {"name": "Cyanation (-C≡N)", "smiles": "CC(=O)NC1=CC(=C(C#N)C=C1)O", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation using CuCN in DMF.", "score": 0.75},
-        {"name": "Methoxylation (-OCH3)", "smiles": "CC(=O)NC1=CC(=C(OC)C=C1)O", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether synthesis using Dimethyl Sulfate.", "score": 0.72},
-        {"name": "Acetylation (-COCH3)", "smiles": "CC(=O)NC1=CC(=C(C(C)=O)C=C1)O", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation with Acetic Anhydride.", "score": 0.69},
-        {"name": "Carboxylation (-COOH)", "smiles": "CC(=O)NC1=CC(=C(C(=O)O)C=C1)O", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Carboxylation using high-pressure CO2 arrays.", "score": 0.65},
-        {"name": "Chlorination (-Cl)", "smiles": "CC(=O)NC1=CC(=C(Cl)C=C1)O", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic chlorination utilizing NCS.", "score": 0.62}
+        {"name": "Methylation (-CH3)", "smiles": "CC(=O)NC1=CC=(C(C)C=C1)O", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions.", "score": 0.92},
+        {"name": "Hydroxylation (-OH)", "smiles": "CC(=O)NC1=CC=(C(O)C=C1)O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis.", "score": 0.88},
+        {"name": "Amination (-NH2)", "smiles": "CC(=O)NC1=CC=(C(N)C=C1)O", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration followed by selective reduction with Pd/C.", "score": 0.85},
+        {"name": "Fluorination (-F)", "smiles": "CC(=O)NC1=CC=(C(F)C=C1)O", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor.", "score": 0.81},
+        {"name": "Trifluoromethylation (-CF3)", "smiles": "CC(=O)NC1=CC=(C(C(F)(F)F)C=C1)O", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using Ruppert-Prakash reagent.", "score": 0.78},
+        {"name": "Cyanation (-C≡N)", "smiles": "CC(=O)NC1=CC=(C(C#N)C=C1)O", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation using CuCN in DMF.", "score": 0.75},
+        {"name": "Methoxylation (-OCH3)", "smiles": "CC(=O)NC1=CC=(C(OC)C=C1)O", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether synthesis using Dimethyl Sulfate.", "score": 0.72},
+        {"name": "Acetylation (-COCH3)", "smiles": "CC(=O)NC1=CC=(C(C(C)=O)C=C1)O", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation with Acetic Anhydride.", "score": 0.69},
+        {"name": "Carboxylation (-COOH)", "smiles": "CC(=O)NC1=CC=(C(C(=O)O)C=C1)O", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Carboxylation using high-pressure CO2 arrays.", "score": 0.65},
+        {"name": "Chlorination (-Cl)", "smiles": "CC(=O)NC1=CC=(C(Cl)C=C1)O", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic chlorination utilizing NCS.", "score": 0.62}
     ]
     
     library = []
@@ -127,7 +127,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
     
     for frag in fragments:
         try:
-            # DeepFrag Core Alignment: Edit the graph by establishing custom bonding attributes
             rw_mol = Chem.RWMol(parent_mol)
             t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
             t_atom.SetNoImplicit(True)
@@ -136,7 +135,6 @@ def run_cleaving_engine(parent_smiles, target_atom_idx):
             combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
             ed_combo = Chem.EditableMol(combo)
             
-            # Form an explicit single attachment path onto the vector index
             ed_combo.AddBond(int(target_atom_idx), num_atoms, order=Chem.BondType.SINGLE)
             derived_mol = ed_combo.GetMol()
             
@@ -188,21 +186,17 @@ st.markdown("""
 **InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India | Contact: sarangresearch@gmail.com
 """)
 
-# Initialize background memory states safely
 if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
 if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
 if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
 if "rd_library" not in st.session_state: st.session_state.rd_library = None
 if "valency_error" not in st.session_state: st.session_state.valency_error = False
 if "error_atom_idx" not in st.session_state: st.session_state.error_atom_idx = None
-
-# Gated step metrics
 if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
 if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
 if "zoom_enabled" not in st.session_state: st.session_state.zoom_enabled = False
 if "staged_ligand_path" not in st.session_state: st.session_state.staged_ligand_path = None
 
-# --- ENGINE ARCHITECTURE MODE SELECTOR ---
 st.sidebar.header("⚙️ Computational Processing Core")
 engine_mode = st.sidebar.radio(
     "Select Optimization Processing Mode:",
@@ -289,7 +283,6 @@ with col_params:
                 except Exception as e:
                     st.error(f"Error reading molecule: {e}")
 
-    # --- 2D VISUAL MAPPING INTERFACE ---
     if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
         st.header("3. Clickable 2D Structural Map")
@@ -363,7 +356,6 @@ with col_visuals:
         if not selected_rows.empty:
             selected_row = selected_rows.iloc[0]
             
-            # --- 2D TOPOGRAPHY HIGHLIGHT MIRROR ---
             st.markdown("##### 📍 Labeled 2D Structural Modification Mirror")
             hl_atoms = [int(x) for x in selected_row["Highlight Atoms"]]
             
@@ -376,7 +368,6 @@ with col_visuals:
             if highlighted_img_html:
                 st.html(highlighted_img_html)
             
-            # --- PDB COORDINATES EXPORT CONTEXT ---
             variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
             if variant_pdb_string:
                 safe_file_id = str(chosen_variant_id).split()[0].replace("-", "_")
@@ -389,7 +380,6 @@ with col_visuals:
                     key="dl_pdb_variant_btn"
                 )
             
-            # Synthetic Evaluation Panels
             st.write("---")
             st.subheader("🧪 Synthetic Route Evaluation Blueprint")
             
@@ -403,7 +393,6 @@ with col_visuals:
             > * **Target Derivative Dynamic SMILES Identity String:** `{selected_row['Redesigned SMILES']}`
             """)
             
-            # Synthetic FTIR graph generator layout
             st.write("---")
             st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
             
