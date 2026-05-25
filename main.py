@@ -233,6 +233,14 @@ def calculate_advanced_adme(smiles):
     hba = Descriptors.NumHAcceptors(mol)
     tpsa = Descriptors.TPSA(mol)
     
+    # Calculate Lipinski Violations
+    violations = sum([mw > 500, logp > 5, hbd > 5, hba > 10])
+    lipinski_obey = "Yes" if violations <= 1 else "No"
+    
+    if violations == 0: oral_bio = "Yes (High Probability)"
+    elif violations == 1: oral_bio = "Yes (Moderate Probability)"
+    else: oral_bio = "No (Poor Bioavailability)"
+
     # Ring Systems
     ring_info = mol.GetRingInfo().AtomRings()
     max_ring = max([len(r) for r in ring_info]) if ring_info else 0
@@ -269,6 +277,7 @@ def calculate_advanced_adme(smiles):
     
     return {
         "MW": mw, "LogP": logp, "HBD": hbd, "HBA": hba, "TPSA": tpsa,
+        "Violations": violations, "Lipinski_Obey": lipinski_obey, "Oral_Bio": oral_bio,
         "MaxRing": max_ring, "Volume": vol, "pKa_Acid": acidic_pka,
         "pKa_Base": basic_pka, "MP": est_mp, "BP": est_bp, "Permeability": perm,
         "BBB": bbb, "HIA": hia
@@ -463,6 +472,7 @@ with col_visuals:
                     * **MaxRing:** The size of the largest macrocyclic ring in the structure. Affects structural rigidity. *Ideal Limit: ≤ 7 (unless targeting macrocycle-specific sites).*
                     * **pKa (Acid/Base):** Predicts the ionization state at physiological pH (7.4). Determines aqueous solubility vs lipid permeability.
                     * **Melting Point (MP) / Boiling Point (BP):** Thermodynamic indicators of crystalline lattice energy. *High MP (> 200°C)* generally correlates with poor aqueous solubility.
+                    * **Lipinski's Rule of 5:** A rule of thumb to evaluate druglikeness. *Rules: MW ≤ 500, LogP ≤ 5, H-bond Donors ≤ 5, H-bond Acceptors ≤ 10.* More than 1 violation predicts poor oral absorption.
                     """)
                 
                 adme_parent = calculate_advanced_adme(parent_smiles)
@@ -473,17 +483,20 @@ with col_visuals:
                     
                     comp_df = pd.DataFrame({
                         "Parameter": [
+                            "Obey Lipinski's Rule?", "Can take Orally? (Bioavailability)",
                             "Permeability Profile", "TPSA (Å²)", "Molecular Volume (Å³)", 
                             "Max Ring Size", "pKa (Acidic)", "pKa (Basic)", 
                             "Est. Melting Point (°C)", "Est. Boiling Point (°C)",
                             "Lipinski Lipophilicity (LogP)"
                         ],
                         "Original Lead": [
+                            adme_parent['Lipinski_Obey'], adme_parent['Oral_Bio'],
                             adme_parent['Permeability'], f"{adme_parent['TPSA']:.2f}", f"{adme_parent['Volume']:.1f}",
                             adme_parent['MaxRing'], adme_parent['pKa_Acid'], adme_parent['pKa_Base'],
                             f"{adme_parent['MP']:.1f}", f"{adme_parent['BP']:.1f}", f"{adme_parent['LogP']:.2f}"
                         ],
                         "Redesigned Variant": [
+                            adme_variant['Lipinski_Obey'], adme_variant['Oral_Bio'],
                             adme_variant['Permeability'], f"{adme_variant['TPSA']:.2f}", f"{adme_variant['Volume']:.1f}",
                             adme_variant['MaxRing'], adme_variant['pKa_Acid'], adme_variant['pKa_Base'],
                             f"{adme_variant['MP']:.1f}", f"{adme_variant['BP']:.1f}", f"{adme_variant['LogP']:.2f}"
@@ -491,8 +504,8 @@ with col_visuals:
                     })
                     st.dataframe(comp_df, hide_index=True, use_container_width=True)
 
-                    # --- Dynamic AI Comparative Statement ---
-                    st.write("#### 🤖 AI Structural Shift Summary")
+                    # --- Dynamic Structural Shift Summary ---
+                    st.write("#### Structural Shift Summary")
                     
                     tpsa_shift = adme_variant['TPSA'] - adme_parent['TPSA']
                     vol_shift = adme_variant['Volume'] - adme_parent['Volume']
@@ -514,9 +527,24 @@ with col_visuals:
                     else:
                         shift_text += "The current modifications have unfortunately rendered the molecule **impermeable to both GI and BBB** barriers. "
                         
-                    if logp_shift > 0.5: shift_text += "Finally, a significant increase in lipophilicity (LogP) was observed, which may require formulation with lipid-based delivery systems to offset poor aqueous solubility."
-                    elif logp_shift < -0.5: shift_text += "Furthermore, lipophilicity (LogP) was reduced, which is predicted to significantly improve aqueous solubility for oral formulation."
+                    if logp_shift > 0.5: shift_text += "A significant increase in lipophilicity (LogP) was observed, which may require formulation with lipid-based delivery systems to offset poor aqueous solubility. "
+                    elif logp_shift < -0.5: shift_text += "Furthermore, lipophilicity (LogP) was reduced, which is predicted to significantly improve aqueous solubility for oral formulation. "
                     
+                    # Definitive Conclusion Logic
+                    if adme_variant['Violations'] < adme_parent['Violations']:
+                        conclusion = "✅ **Overall Assessment: Favorable.** This redesigned structure is **better** than the original lead due to improved Lipinski compliance and higher predicted oral bioavailability."
+                    elif adme_variant['Violations'] > adme_parent['Violations']:
+                        conclusion = "❌ **Overall Assessment: Unfavorable.** This redesigned structure is **worse** than the original lead because it introduces new Lipinski violations, likely reducing oral bioavailability."
+                    else:
+                        if adme_variant['Violations'] <= 1:
+                            if adme_variant['Permeability'] != "Poor Absorption / Impermeable":
+                                conclusion = "⚖️ **Overall Assessment: Comparable.** Both structures obey Lipinski's rules and maintain good bioavailability. The redesigned structure is **a strong, viable alternative** to the original lead."
+                            else:
+                                conclusion = "⚠️ **Overall Assessment: Unfavorable.** Despite obeying Lipinski's rules, the redesign resulted in poor predicted barrier permeability, making it **worse** for oral delivery than the original lead."
+                        else:
+                            conclusion = "⚠️ **Overall Assessment: Comparable but Flawed.** Both structures possess multiple Lipinski violations. The redesign **does not significantly improve** fundamental oral drug-likeness over the original lead."
+                    
+                    shift_text += "\n\n" + conclusion
                     st.success(shift_text)
 
             # =====================================================================
