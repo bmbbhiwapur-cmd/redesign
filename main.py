@@ -454,7 +454,9 @@ with col_params:
         
         show_labels = st.toggle("🔍 Show Atom Index Numbers on Structure", value=True)
         base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles, include_labels=show_labels, zoom_level=600)
-        if base_img: st.html(base_img)
+        
+        # Using markdown with unsafe_allow_html for better compatibility with older Streamlit versions
+        if base_img: st.markdown(base_img, unsafe_allow_html=True)
         
         if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
             st.info("💡 The system has automatically identified chemically legal cleavage sites. Select an atom from the list below.")
@@ -490,7 +492,7 @@ with col_visuals:
             selected_row = selected_rows.iloc[0]
             
             highlighted_img_html = generate_clean_2d_image(str(selected_row["Redesigned SMILES"]))
-            if highlighted_img_html: st.html(highlighted_img_html)
+            if highlighted_img_html: st.markdown(highlighted_img_html, unsafe_allow_html=True)
             
             st.write(f"**Structural Identification:** Appended functional group: **{str(selected_row['Fragment Added'])}**.")
             
@@ -512,122 +514,132 @@ with col_visuals:
             chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
             st.line_chart(chart_df, height=220)
             
-            st.write("---")
-            st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
+            # =====================================================================
+            # --- HIDDEN DOCKING SECTION ---
+            # The following UI block has been commented out to remain invisible 
+            # while keeping the original logic completely intact within the file.
+            # =====================================================================
             
-            det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
-
-            if st.button("🚀 Run 5-Pose Thermodynamic Docking Core"):
-                with st.spinner("Processing thermodynamic docking arrays across 5 unique poses..."):
-                    pose_list = []
-                    for p in range(5):
-                        p_score, p_res, p_bond = run_true_vina_docking_pose(
-                            str(selected_row["Redesigned SMILES"]), st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
-                        )
-                        orig_score, orig_res, orig_bond = run_true_vina_docking_pose(
-                            st.session_state.rd_parent_smiles, st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
-                        )
-                        
-                        pose_list.append({
-                            "Pose ID": f"Pose #{p+1}",
-                            "Parent Energy": round(orig_score + 0.35, 2),
-                            "Variant Energy": p_score,
-                            "Parent Residue": orig_res,
-                            "Parent Bond": orig_bond,
-                            "Variant Residue": p_res,
-                            "Variant Bond": p_bond,
-                            "Pose Rank": p
-                        })
-                    st.session_state.docking_results = pose_list
+            # st.write("---")
+            # st.header("🚀 5. Advanced Native Multi-Pose Docking Matrix")
+            # 
+            # det_x, det_y, det_z = auto_detect_heteroatom_center(st.session_state.rd_receptor)
+            # 
+            # if st.button("🚀 Run 5-Pose Thermodynamic Docking Core"):
+            #     with st.spinner("Processing thermodynamic docking arrays across 5 unique poses..."):
+            #         pose_list = []
+            #         for p in range(5):
+            #             p_score, p_res, p_bond = run_true_vina_docking_pose(
+            #                 str(selected_row["Redesigned SMILES"]), st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
+            #             )
+            #             orig_score, orig_res, orig_bond = run_true_vina_docking_pose(
+            #                 st.session_state.rd_parent_smiles, st.session_state.rd_receptor, det_x, det_y, det_z, 22, p
+            #             )
+            #             
+            #             pose_list.append({
+            #                 "Pose ID": f"Pose #{p+1}",
+            #                 "Parent Energy": round(orig_score + 0.35, 2),
+            #                 "Variant Energy": p_score,
+            #                 "Parent Residue": orig_res,
+            #                 "Parent Bond": orig_bond,
+            #                 "Variant Residue": p_res,
+            #                 "Variant Bond": p_bond,
+            #                 "Pose Rank": p
+            #             })
+            #         st.session_state.docking_results = pose_list
+            # 
+            # if st.session_state.docking_results is not None:
+            #     st.write("---")
+            #     st.subheader("📊 Comparative Pose Analysis")
+            #     
+            #     pose_options = [p["Pose ID"] for p in st.session_state.docking_results]
+            #     selected_pose_name = st.selectbox("🎯 Select Docking Pose to Inspect", options=pose_options)
+            #     
+            #     selected_pose_data = next(item for item in st.session_state.docking_results if item["Pose ID"] == selected_pose_name)
+            #     
+            #     col_metric_1, col_metric_2 = st.columns(2)
+            #     with col_metric_1:
+            #         st.write("#### Original Parent Scaffold")
+            #         st.metric("Binding Energy", f"{selected_pose_data['Parent Energy']} kcal/mol")
+            #         st.write(f"**Residue:** {selected_pose_data['Parent Residue']}")
+            #         st.write(f"**Bond Type:** {selected_pose_data['Parent Bond']}")
+            #         
+            #     with col_metric_2:
+            #         st.write("#### AI Redesigned Variant")
+            #         delta = round(selected_pose_data['Variant Energy'] - selected_pose_data['Parent Energy'], 2)
+            #         st.metric("Binding Energy", f"{selected_pose_data['Variant Energy']} kcal/mol", delta=f"{delta} kcal/mol", delta_color="inverse")
+            #         st.write(f"**Residue:** {selected_pose_data['Variant Residue']}")
+            #         st.write(f"**Bond Type:** {selected_pose_data['Variant Bond']}")
+            # 
+            #     if STMOL_AVAILABLE and st.session_state.rd_receptor:
+            #         st.write("---")
+            #         st.subheader(f"🖥️ High-Resolution Interaction Canvas ({selected_pose_name})")
+            # 
+            #         view_style = st.selectbox(
+            #             "Select High-Res Topology Mode:",
+            #             ["Interaction Pocket Focus (Atom-Level)", "Full Protein + Surface", "Classic Backbone"]
+            #         )
+            # 
+            #         xyz_view = py3Dmol.view(width=700, height=500)
+            # 
+            #         var_anchor_res = selected_pose_data['Variant Residue']
+            #         try: var_res_num = int(var_anchor_res.split('-')[1])
+            #         except: var_res_num = -1
+            #         
+            #         par_anchor_res = selected_pose_data['Parent Residue']
+            #         try: par_res_num = int(par_anchor_res.split('-')[1])
+            #         except: par_res_num = -1
+            # 
+            #         if os.path.exists(st.session_state.rd_receptor):
+            #             with open(st.session_state.rd_receptor, "r") as pf:
+            #                 xyz_view.addModel(pf.read(), "pdb")
+            # 
+            #         if view_style == "Interaction Pocket Focus (Atom-Level)":
+            #             xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'white', 'opacity': 0.3}})
+            #             
+            #             if var_res_num != -1:
+            #                 xyz_view.addStyle({'model': 0, 'resi': str(var_res_num)}, {'stick': {'colorscheme': 'orangeCarbon', 'radius': 0.15}})
+            #                 xyz_view.addLabel(f"Variant Anchor: {var_anchor_res}", 
+            #                                   {'fontColor': 'orange', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
+            #                                   {'model': 0, 'resi': str(var_res_num)})
+            #                 
+            #             if par_res_num != -1 and par_res_num != var_res_num:
+            #                 xyz_view.addStyle({'model': 0, 'resi': str(par_res_num)}, {'stick': {'colorscheme': 'cyanCarbon', 'radius': 0.15}})
+            #                 xyz_view.addLabel(f"Original Anchor: {par_anchor_res}", 
+            #                                   {'fontColor': 'cyan', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
+            #                                   {'model': 0, 'resi': str(par_res_num)})
+            #         
+            #         elif view_style == "Full Protein + Surface":
+            #             xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'spectrum'}})
+            #             xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.25, 'color': 'white'}, {'model': 0})
+            #         else:
+            #             xyz_view.setStyle({'model': 0}, {'line': {}})
+            # 
+            #         current_rank = selected_pose_data['Pose Rank']
+            #         
+            #         parent_pdb_geom = generate_pocket_centered_pdb(st.session_state.rd_parent_smiles, det_x, det_y, det_z, pose_offset=current_rank)
+            #         if parent_pdb_geom:
+            #             xyz_view.addModel(parent_pdb_geom, "pdb")
+            #             xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.15}})
+            #             xyz_view.addLabel("Original Scaffold", {'fontColor': 'black', 'backgroundColor': 'white', 'fontSize': 12}, {'model': 1})
+            # 
+            #         variant_pdb_geom = generate_pocket_centered_pdb(str(selected_row["Redesigned SMILES"]), det_x, det_y, det_z, pose_offset=current_rank)
+            #         if variant_pdb_geom:
+            #             xyz_view.addModel(variant_pdb_geom, "pdb")
+            #             xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
+            #             xyz_view.addStyle({'model': 2}, {'sphere': {'radius': 0.35, 'colorscheme': 'greenCarbon'}})
+            #             xyz_view.addLabel("Redesign Variant", {'fontColor': 'black', 'backgroundColor': 'lightgreen', 'fontSize': 12}, {'model': 2})
+            # 
+            #         if view_style == "Interaction Pocket Focus (Atom-Level)" and var_res_num != -1:
+            #             xyz_view.zoomTo({'model': 0, 'resi': str(var_res_num)})
+            #         else:
+            #             xyz_view.zoomTo()
+            # 
+            #         showmol(xyz_view, height=500, width=700)
             
-            if st.session_state.docking_results is not None:
-                st.write("---")
-                st.subheader("📊 Comparative Pose Analysis")
-                
-                pose_options = [p["Pose ID"] for p in st.session_state.docking_results]
-                selected_pose_name = st.selectbox("🎯 Select Docking Pose to Inspect", options=pose_options)
-                
-                selected_pose_data = next(item for item in st.session_state.docking_results if item["Pose ID"] == selected_pose_name)
-                
-                col_metric_1, col_metric_2 = st.columns(2)
-                with col_metric_1:
-                    st.write("#### Original Parent Scaffold")
-                    st.metric("Binding Energy", f"{selected_pose_data['Parent Energy']} kcal/mol")
-                    st.write(f"**Residue:** {selected_pose_data['Parent Residue']}")
-                    st.write(f"**Bond Type:** {selected_pose_data['Parent Bond']}")
-                    
-                with col_metric_2:
-                    st.write("#### AI Redesigned Variant")
-                    delta = round(selected_pose_data['Variant Energy'] - selected_pose_data['Parent Energy'], 2)
-                    st.metric("Binding Energy", f"{selected_pose_data['Variant Energy']} kcal/mol", delta=f"{delta} kcal/mol", delta_color="inverse")
-                    st.write(f"**Residue:** {selected_pose_data['Variant Residue']}")
-                    st.write(f"**Bond Type:** {selected_pose_data['Variant Bond']}")
-
-                if STMOL_AVAILABLE and st.session_state.rd_receptor:
-                    st.write("---")
-                    st.subheader(f"🖥️ High-Resolution Interaction Canvas ({selected_pose_name})")
-
-                    view_style = st.selectbox(
-                        "Select High-Res Topology Mode:",
-                        ["Interaction Pocket Focus (Atom-Level)", "Full Protein + Surface", "Classic Backbone"]
-                    )
-
-                    xyz_view = py3Dmol.view(width=700, height=500)
-
-                    var_anchor_res = selected_pose_data['Variant Residue']
-                    try: var_res_num = int(var_anchor_res.split('-')[1])
-                    except: var_res_num = -1
-                    
-                    par_anchor_res = selected_pose_data['Parent Residue']
-                    try: par_res_num = int(par_anchor_res.split('-')[1])
-                    except: par_res_num = -1
-
-                    if os.path.exists(st.session_state.rd_receptor):
-                        with open(st.session_state.rd_receptor, "r") as pf:
-                            xyz_view.addModel(pf.read(), "pdb")
-
-                    if view_style == "Interaction Pocket Focus (Atom-Level)":
-                        xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'white', 'opacity': 0.3}})
-                        
-                        if var_res_num != -1:
-                            xyz_view.addStyle({'model': 0, 'resi': str(var_res_num)}, {'stick': {'colorscheme': 'orangeCarbon', 'radius': 0.15}})
-                            xyz_view.addLabel(f"Variant Anchor: {var_anchor_res}", 
-                                              {'fontColor': 'orange', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
-                                              {'model': 0, 'resi': str(var_res_num)})
-                            
-                        if par_res_num != -1 and par_res_num != var_res_num:
-                            xyz_view.addStyle({'model': 0, 'resi': str(par_res_num)}, {'stick': {'colorscheme': 'cyanCarbon', 'radius': 0.15}})
-                            xyz_view.addLabel(f"Original Anchor: {par_anchor_res}", 
-                                              {'fontColor': 'cyan', 'backgroundColor': 'white', 'showBackground': True, 'fontSize': 12}, 
-                                              {'model': 0, 'resi': str(par_res_num)})
-                    
-                    elif view_style == "Full Protein + Surface":
-                        xyz_view.setStyle({'model': 0}, {'cartoon': {'color': 'spectrum'}})
-                        xyz_view.addSurface(py3Dmol.VDW, {'opacity': 0.25, 'color': 'white'}, {'model': 0})
-                    else:
-                        xyz_view.setStyle({'model': 0}, {'line': {}})
-
-                    current_rank = selected_pose_data['Pose Rank']
-                    
-                    parent_pdb_geom = generate_pocket_centered_pdb(st.session_state.rd_parent_smiles, det_x, det_y, det_z, pose_offset=current_rank)
-                    if parent_pdb_geom:
-                        xyz_view.addModel(parent_pdb_geom, "pdb")
-                        xyz_view.setStyle({'model': 1}, {'stick': {'colorscheme': 'whiteCarbon', 'radius': 0.15}})
-                        xyz_view.addLabel("Original Scaffold", {'fontColor': 'black', 'backgroundColor': 'white', 'fontSize': 12}, {'model': 1})
-
-                    variant_pdb_geom = generate_pocket_centered_pdb(str(selected_row["Redesigned SMILES"]), det_x, det_y, det_z, pose_offset=current_rank)
-                    if variant_pdb_geom:
-                        xyz_view.addModel(variant_pdb_geom, "pdb")
-                        xyz_view.setStyle({'model': 2}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
-                        xyz_view.addStyle({'model': 2}, {'sphere': {'radius': 0.35, 'colorscheme': 'greenCarbon'}})
-                        xyz_view.addLabel("Redesign Variant", {'fontColor': 'black', 'backgroundColor': 'lightgreen', 'fontSize': 12}, {'model': 2})
-
-                    if view_style == "Interaction Pocket Focus (Atom-Level)" and var_res_num != -1:
-                        xyz_view.zoomTo({'model': 0, 'resi': str(var_res_num)})
-                    else:
-                        xyz_view.zoomTo()
-
-                    showmol(xyz_view, height=500, width=700)
-                        
+            # =====================================================================
+            # --- END OF HIDDEN DOCKING SECTION ---
+            # =====================================================================
+            
     else:
         st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
