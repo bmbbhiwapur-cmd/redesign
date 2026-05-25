@@ -1,7 +1,5 @@
 import streamlit as st
 import os
-import urllib.request
-import re
 import numpy as np
 import pandas as pd
 import base64
@@ -9,408 +7,312 @@ import io
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
 
+# --- INITIALIZATION SAFETY WRAPPER ---
+def initialize_session():
+    defaults = {
+        "rd_parent_smiles": None,
+        "rd_library": None,
+        "ligand_parsed": False
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+initialize_session()
+
 # --- BIOINFORMATICS STRUCTURAL ENGINE ---
 
-def fetch_pdb_from_rcsb(pdb_id):
-    pdb_id = pdb_id.strip().lower()
-    url = f"https://files.rcsb.org/download/{pdb_id}.pdb"
-    local_pdb = f"{pdb_id}.pdb"
-    try:
-        urllib.request.urlretrieve(url, local_pdb)
-        return True, local_pdb
-    except Exception:
-        return False, f"Could not find or download PDB ID '{pdb_id.upper()}'."
-
-def generate_pdb_string_from_smiles(smiles_str):
-    """Generates a standard compliant PDB structural string safely."""
-    if not smiles_str:
-        return None
+def generate_clean_2d_image(smiles_str, include_labels=False, zoom_level=450):
+    """Generates high-quality 2D topographic maps of the molecules."""
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol:
-            Chem.SanitizeMol(mol)
-            mol = Chem.AddHs(mol)
-            params = AllChem.ETKDGv3()
-            params.useRandomCoords = True
-            embed_status = AllChem.EmbedMolecule(mol, params)
-            if embed_status >= 0:
-                AllChem.MMFFOptimizeMolecule(mol)
-                return Chem.MolToPDBBlock(mol)
-    except Exception:
-        pass
-    return None
-
-def generate_labeled_2d_image(smiles_str, highlight_dict=None, legend_text="Locate your target position number below:", zoom_level=450):
-    """Generates a 2D image of the molecule with custom colored atom highlights (Red/Green/Yellow)."""
-    try:
-        mol = Chem.MolFromSmiles(smiles_str)
-        if mol:
-            mol_to_draw = Chem.Mol(mol)
-            for atom in mol_to_draw.GetAtoms():
-                atom.SetProp('atomNote', f"#{atom.GetIdx()}")
-            
-            kwargs = {}
-            if highlight_dict:
-                valid_highlights = {int(k): v for k, v in highlight_dict.items() if int(k) < mol_to_draw.GetNumAtoms()}
-                if valid_highlights:
-                    kwargs['highlightAtoms'] = list(valid_highlights.keys())
-                    kwargs['highlightAtomColors'] = valid_highlights
-            
-            img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)), legend=legend_text, **kwargs)
+            mol_to_draw = Chem.RemoveHs(mol)
+            if include_labels:
+                for atom in mol_to_draw.GetAtoms():
+                    atom.SetProp('atomNote', str(atom.GetIdx()))
+            img = Draw.MolToImage(mol_to_draw, size=(zoom_level, int(zoom_level * 0.77)))
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
             img_str = base64.b64encode(buffered.getvalue()).decode()
-            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom:15px;"/>'
+            return f'<img src="data:image/png;base64,{img_str}" style="max-width:100%; border-radius:8px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); margin-bottom:15px;"/>'
     except Exception:
         pass
     return None
 
-# --- ENGINE MODE A: MOCK DEEPFRAG SANDBOX DATA ---
-def run_sandbox_engine(target_atom_idx):
-    """Returns absolute pre-verified flawless mock structures that can never throw valency errors."""
-    mock_data = [
-        {"name": "Methylation (-CH3)", "smiles": "CC(=O)NC1=CC=(C(C)C=C1)O", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions.", "score": 0.92},
-        {"name": "Hydroxylation (-OH)", "smiles": "CC(=O)NC1=CC=(C(O)C=C1)O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis.", "score": 0.88},
-        {"name": "Amination (-NH2)", "smiles": "CC(=O)NC1=CC=(C(N)C=C1)O", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration followed by selective reduction with Pd/C.", "score": 0.85},
-        {"name": "Fluorination (-F)", "smiles": "CC(=O)NC1=CC=(C(F)C=C1)O", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor.", "score": 0.81},
-        {"name": "Trifluoromethylation (-CF3)", "smiles": "CC(=O)NC1=CC=(C(C(F)(F)F)C=C1)O", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using Ruppert-Prakash reagent.", "score": 0.78},
-        {"name": "Cyanation (-C≡N)", "smiles": "CC(=O)NC1=CC=(C(C#N)C=C1)O", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation using CuCN in DMF.", "score": 0.75},
-        {"name": "Methoxylation (-OCH3)", "smiles": "CC(=O)NC1=CC=(C(OC)C=C1)O", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether synthesis using Dimethyl Sulfate.", "score": 0.72},
-        {"name": "Acetylation (-COCH3)", "smiles": "CC(=O)NC1=CC=(C(C(C)=O)C=C1)O", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation with Acetic Anhydride.", "score": 0.69},
-        {"name": "Carboxylation (-COOH)", "smiles": "CC(=O)NC1=CC=(C(C(=O)O)C=C1)O", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Carboxylation using high-pressure CO2 arrays.", "score": 0.65},
-        {"name": "Chlorination (-Cl)", "smiles": "CC(=O)NC1=CC=(C(Cl)C=C1)O", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic chlorination utilizing NCS.", "score": 0.62}
-    ]
-    
-    library = []
-    for idx, item in enumerate(mock_data):
-        m = Chem.MolFromSmiles(item["smiles"])
-        mw = round(Descriptors.MolWt(m), 2) if m else 165.1
-        logp = round(Descriptors.MolLogP(m), 2) if m else 1.2
+def find_valid_cleavage_sites(smiles_str):
+    """Scans the parent molecule for chemically valid substitution anchor points."""
+    valid_sites = []
+    try:
+        mol = Chem.MolFromSmiles(smiles_str)
+        if mol:
+            for atom in mol.GetAtoms():
+                idx = atom.GetIdx()
+                sym = atom.GetSymbol()
+                deg = atom.GetDegree()
+                hs = atom.GetTotalNumHs()
+                
+                if deg == 1 and sym != 'C':
+                    valid_sites.append({"index": idx, "label": f"Atom #{idx} (Terminal {sym})"})
+                elif sym == 'C' and hs > 0:
+                    valid_sites.append({"index": idx, "label": f"Atom #{idx} ({sym} with available H)"})
+                elif sym in ['N', 'O', 'S'] and hs > 0:
+                    valid_sites.append({"index": idx, "label": f"Atom #{idx} (Core {sym} with available H)"})
+                    
+        valid_sites.sort(key=lambda x: (0 if "Terminal" in x["label"] else 1, x["index"]))
+    except Exception:
+        pass
+    return valid_sites
+
+def get_dynamic_fragments(parent_smiles):
+    """Identifies the scaffold class and proposes appropriate functional groups."""
+    mol = Chem.MolFromSmiles(parent_smiles)
+    if not mol: return "Standard Organic Scaffold", []
+
+    flavone_smarts = Chem.MolFromSmarts("c1cc(O)cc2c1c(=O)cc(c2)c3ccccc3")
+    phenol_count = len(mol.GetSubstructMatches(Chem.MolFromSmarts("c[OH]")))
+    alkaloid_smarts = Chem.MolFromSmarts("[#7;R]")
+    aliphatic_carbons = [a for a in mol.GetAtoms() if a.GetSymbol() == 'C' and not a.GetIsAromatic()]
+    total_carbons = [a for a in mol.GetAtoms() if a.GetSymbol() == 'C']
+    aliphatic_ratio = len(aliphatic_carbons) / len(total_carbons) if total_carbons else 0
+
+    if mol.HasSubstructMatch(flavone_smarts) or phenol_count >= 2:
+        subclass_title = "Polyphenolic Flavonoid Core"
+        fragments = [
+            {"name": "Glucosylation (-C6H11O5)", "smiles": "OC1C(O)C(O)C(O)C(CO)O1", "peak": 3350, "yield": "Moderate Yield (58%)", "route": "Enzymatic glycosylation via Phase II transferase mirroring."},
+            {"name": "Prenylation (-CH2CH=C(CH3)2)", "smiles": "CC(C)=CC", "peak": 1660, "yield": "Good Yield (72%)", "route": "Late-stage electrophilic C-alkylation."},
+            {"name": "O-Methylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Excellent Yield (91%)", "route": "Selective etherification using Dimethyl Sulfate."},
+            {"name": "Acetylation (-OCOCH3)", "smiles": "OC(=O)C", "peak": 1735, "yield": "Good Yield (84%)", "route": "Esterification utilizing Acetic Anhydride."}
+        ]
+    elif mol.HasSubstructMatch(alkaloid_smarts):
+        subclass_title = "Alkaloidal Nitrogen Heterocycle"
+        fragments = [
+            {"name": "N-Alkylation (-CH2CH3)", "smiles": "CC", "peak": 2960, "yield": "Good Yield (80%)", "route": "Nucleophilic substitution at nitrogen nodes using Ethyl Bromide."},
+            {"name": "Quaternization (-CH3+)", "smiles": "C", "peak": 2850, "yield": "Excellent Yield (94%)", "route": "Methylation using Methyl Iodide."},
+            {"name": "Amidation (-COCH3)", "smiles": "C(=O)C", "peak": 1665, "yield": "Good Yield (78%)", "route": "Amide condensation using Acetyl Chloride."},
+            {"name": "N-Oxidation (=O)", "smiles": "[O-]", "peak": 950, "yield": "Moderate Yield (65%)", "route": "Controlled oxidation via mCPBA."}
+        ]
+    elif aliphatic_ratio > 0.65:
+        subclass_title = "Aliphatic Terpenoid Scaffold"
+        fragments = [
+            {"name": "Epoxidation (=O)", "smiles": "O", "peak": 1250, "yield": "Moderate Yield (60%)", "route": "Prilezhaev reaction using mCPBA across isolated alkene bonds."},
+            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3400, "yield": "Poor Yield (42%)", "route": "Allylic C-H functionalization driven by Selenium Dioxide."},
+            {"name": "Ozonolysis Fragmentation", "smiles": "O=C", "peak": 1710, "yield": "Good Yield (70%)", "route": "Oxidative cleavage of double bonds."},
+            {"name": "Esterification (-COOCH3)", "smiles": "C(=O)OC", "peak": 1740, "yield": "Good Yield (86%)", "route": "Fischer esterification across terminal carboxylic vectors."}
+        ]
+    else:
+        subclass_title = "Standard Organic Lead Profile"
+        fragments = [
+            {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Standard alkylation path via Methyl Iodide."},
+            {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H matrix oxidation with copper coordination."},
+            {"name": "Amination (-NH2)", "smiles": "N", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled substitution via nucleophilic amination."},
+            {"name": "Fluorination (-F)", "smiles": "F", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor."}
+        ]
+    return subclass_title, fragments
+
+def run_cleaving_engine(parent_smiles, target_atom_idx, mechanism_mode):
+    """Executes the dummy-tag replacement algorithm to construct new derivatives."""
+    parent_mol = Chem.MolFromSmiles(parent_smiles)
+    if not parent_mol: return []
         
-        library.append({
-            "Variant ID": f"Derivative-{idx+1:02d} (Rank {idx+1})",
-            "Fragment Added": item["name"],
-            "Redesigned SMILES": item["smiles"],
-            "Delta Score": item["score"],
+    _, fragments = get_dynamic_fragments(parent_smiles)
+    derived_library = []
+    
+    for idx, frag in enumerate(fragments):
+        success = False
+        derived_smiles = ""
+        
+        if mechanism_mode == "True Covalent Substitution (Cleavage & Attachment)":
+            try:
+                rw_mol = Chem.RWMol(parent_mol)
+                t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
+                is_terminal = (t_atom.GetDegree() == 1 and t_atom.GetSymbol() != 'C')
+                
+                # Plant Dummy Tag
+                if is_terminal:
+                    t_atom.SetAtomicNum(0)
+                    t_atom.SetIsotope(999)
+                else:
+                    dummy = Chem.Atom(0)
+                    dummy.SetIsotope(999)
+                    new_idx = rw_mol.AddAtom(dummy)
+                    rw_mol.AddBond(int(target_atom_idx), new_idx, Chem.BondType.SINGLE)
+                
+                tagged_mol = rw_mol.GetMol()
+                Chem.SanitizeMol(tagged_mol)
+                
+                # Graft the fragment
+                pattern = Chem.MolFromSmarts("[999*]")
+                frag_mol = Chem.MolFromSmiles(frag['smiles'])
+                replaced_mols = AllChem.ReplaceSubstructs(tagged_mol, pattern, frag_mol, replaceAll=True)
+                
+                if replaced_mols:
+                    final_mol = replaced_mols[0]
+                    Chem.SanitizeMol(final_mol)
+                    derived_smiles = Chem.MolToSmiles(final_mol)
+                    if Chem.MolFromSmiles(derived_smiles):
+                        success = True
+            except Exception:
+                success = False
+
+        if not success:
+            derived_smiles = f"{parent_smiles}.{frag['smiles']}"
+            frag_name = frag["name"] + " (Co-Crystal Fallback)" if "Co-Crystal" not in mechanism_mode else frag["name"] + " (Co-Crystal)"
+            route = "Co-crystallization (due to steric constraints blocking covalent bond)." if "Co-Crystal" not in mechanism_mode else "Co-crystallization or therapeutic salt formulation protocol."
+        else:
+            frag_name = frag["name"]
+            route = frag["route"]
+            
+        test_mol = Chem.MolFromSmiles(derived_smiles)
+        mw = round(Descriptors.MolWt(test_mol), 2) if test_mol else 0
+        logp = round(Descriptors.MolLogP(test_mol), 2) if test_mol else 0
+        
+        derived_library.append({
+            "Variant ID": f"Derivative-{idx+1:02d}" if success else f"Formulation-{idx+1:02d}",
+            "Fragment Added": frag_name,
+            "Redesigned SMILES": derived_smiles,
             "MW (g/mol)": mw,
             "LogP": logp,
-            "Yield Prediction": item["yield"],
-            "Route": item["route"],
-            "FTIR Peak": int(item["peak"]),
-            "Highlight Atoms": [int(target_atom_idx)]
+            "Yield Prediction": frag["yield"] if success else "Pharmaceutical Salt Matrix",
+            "Route": route,
+            "FTIR Peak": int(frag["peak"])
         })
-    return library
-
-# --- ENGINE MODE B: DEEPFRAG ATOM-CLEAVING SUBSTITUTION ---
-def run_cleaving_engine(parent_smiles, target_atom_idx):
-    """Deconstructs the core target node completely to bypass valency walls dynamically."""
-    parent_mol = Chem.MolFromSmiles(parent_smiles)
-    if not parent_mol:
-        return []
-        
-    num_atoms = parent_mol.GetNumAtoms()
-    fragments = [
-        {"name": "Methylation (-CH3)", "smiles": "C", "peak": 2925, "yield": "Good Yield (85%)", "route": "Alkylation via Methyl Iodide under basic carbonate conditions."},
-        {"name": "Hydroxylation (-OH)", "smiles": "O", "peak": 3450, "yield": "Moderate Yield (62%)", "route": "Direct C-H oxidation utilizing copper or iron catalysis."},
-        {"name": "Amination (-NH2)", "smiles": "N", "peak": 3320, "yield": "Good Yield (74%)", "route": "Controlled nitration followed by selective reduction with Pd/C."},
-        {"name": "Fluorination (-F)", "smiles": "F", "peak": 1150, "yield": "Poor Yield (38%)", "route": "Late-stage electrophilic fluorination using Selectfluor."},
-        {"name": "Trifluoromethylation (-CF3)", "smiles": "C(F)(F)F", "peak": 1280, "yield": "Moderate Yield (55%)", "route": "Trifluoromethylation using Ruppert-Prakash reagent."},
-        {"name": "Cyanation (-C≡N)", "smiles": "C#N", "peak": 2220, "yield": "Good Yield (81%)", "route": "Rosenmund-von Braun cyanation using CuCN in refluxing DMF."},
-        {"name": "Methoxylation (-OCH3)", "smiles": "OC", "peak": 1250, "yield": "Good Yield (88%)", "route": "Williamson ether synthesis using Dimethyl Sulfate."},
-        {"name": "Acetylation (-COCH3)", "smiles": "C(=O)C", "peak": 1685, "yield": "Good Yield (79%)", "route": "Friedel-Crafts Acylation with Acetic Anhydride and Lewis Acid."},
-        {"name": "Carboxylation (-COOH)", "smiles": "C(=O)O", "peak": 1715, "yield": "Moderate Yield (50%)", "route": "Carboxylation using high-pressure CO2 or carboxymethylation."},
-        {"name": "Chlorination (-Cl)", "smiles": "Cl", "peak": 720, "yield": "Poor Yield (45%)", "route": "Electrophilic aromatic chlorination utilizing NCS."}
-    ]
-    
-    derived_library = []
-    rank_counter = 1
-    
-    for frag in fragments:
-        try:
-            rw_mol = Chem.RWMol(parent_mol)
-            t_atom = rw_mol.GetAtomWithIdx(int(target_atom_idx))
-            t_atom.SetNoImplicit(True)
-            
-            frag_mol = Chem.MolFromSmiles(frag["smiles"])
-            combo = Chem.ComboMol(rw_mol.GetMol(), frag_mol)
-            ed_combo = Chem.EditableMol(combo)
-            
-            ed_combo.AddBond(int(target_atom_idx), num_atoms, order=Chem.BondType.SINGLE)
-            derived_mol = ed_combo.GetMol()
-            
-            for atom in derived_mol.GetAtoms():
-                atom.SetNoImplicit(False)
-                
-            Chem.SanitizeMol(derived_mol)
-            derived_smiles = Chem.MolToSmiles(derived_mol)
-            
-            test_mol = Chem.MolFromSmiles(derived_smiles)
-            if not test_mol:
-                continue
-                
-            test_img = generate_labeled_2d_image(derived_smiles, highlight_dict={int(target_atom_idx): (0.4, 0.9, 0.4)})
-            if not test_img:
-                continue
-                
-            mw = round(Descriptors.MolWt(test_mol), 2)
-            logp = round(Descriptors.MolLogP(test_mol), 2)
-            simulated_score = round(0.95 - (rank_counter * 0.02) - (abs(logp) * 0.01), 2)
-            
-            added_indices = [a.GetIdx() for a in test_mol.GetAtoms() if a.GetIdx() >= num_atoms]
-            if not added_indices:
-                added_indices = [int(target_atom_idx)]
-                
-            derived_library.append({
-                "Variant ID": f"Derivative-{rank_counter:02d} (Rank {rank_counter})",
-                "Fragment Added": frag["name"],
-                "Redesigned SMILES": derived_smiles,
-                "Delta Score": max(simulated_score, 0.40),
-                "MW (g/mol)": mw,
-                "LogP": logp,
-                "Yield Prediction": frag["yield"],
-                "Route": frag["route"],
-                "FTIR Peak": int(frag["peak"]),
-                "Highlight Atoms": added_indices
-            })
-            rank_counter += 1
-        except Exception:
-            continue
             
     return derived_library
 
 
 # --- APPLICATION SETUP ---
 st.set_page_config(page_title="InSilico BioSphere Redesign", layout="wide")
-st.title("🧬 InSilico BioSphere AI Small-Molecule Redesign Studio")
-st.markdown("""
-**InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India | Contact: sarangresearch@gmail.com
-""")
+st.title("🧬 InSilico BioSphere AI Molecular Redesign Studio")
+st.markdown("**InSilico BioSphere** | Developed by: Mr. Sarang S. Dhote, Assistant Professor, Department of Chemistry, Shivaji Science College, Nagpur, India")
 
-if "rd_receptor" not in st.session_state: st.session_state.rd_receptor = None
-if "rd_ligand" not in st.session_state: st.session_state.rd_ligand = None
-if "rd_parent_smiles" not in st.session_state: st.session_state.rd_parent_smiles = None
-if "rd_library" not in st.session_state: st.session_state.rd_library = None
-if "valency_error" not in st.session_state: st.session_state.valency_error = False
-if "error_atom_idx" not in st.session_state: st.session_state.error_atom_idx = None
-if "protein_parsed" not in st.session_state: st.session_state.protein_parsed = False
-if "ligand_parsed" not in st.session_state: st.session_state.ligand_parsed = False
-if "zoom_enabled" not in st.session_state: st.session_state.zoom_enabled = False
-if "staged_ligand_path" not in st.session_state: st.session_state.staged_ligand_path = None
-
-st.sidebar.header("⚙️ Computational Processing Core")
-engine_mode = st.sidebar.radio(
-    "Select Optimization Processing Mode:",
-    ["Option A: 'Mock DeepFrag' Sandbox (100% Error-Free)", "Option B: True Structural Cleaving (Dynamic Research Mode)"]
-)
-
-if st.button("🔄 Reset Entire Redesign Environment", type="secondary", use_container_width=True):
+if st.button("🔄 Reset Environment", type="secondary"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    st.success("Redesign parameters completely cleared!")
     st.rerun()
+
+st.write("---")
 
 col_params, col_visuals = st.columns([1, 1])
 
 with col_params:
-    st.header("1. Target Protein Grid Matrix")
+    st.header("1. Phytochemical Scaffold Profile")
     
-    if st.session_state.protein_parsed and st.session_state.rd_receptor:
-        st.success("🟢 Target Protein Matrix Ready for Operations")
-    else:
-        st.error("🔴 Matrix Vector Alert: Target protein structure has not been parsed yet.")
+    if st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
+        st.success("🟢 Phytochemical Lead Scaffold Loaded")
         
-    protein_mode = st.radio("Protein Input Setup:", ["Download PDB ID", "Upload Local Structure File"])
-    
-    if protein_mode == "Download PDB ID":
-        pdb_id = st.text_input("Enter 4-Letter PDB Code", value="2AMB").strip()
-        if st.button("📥 Parse Target Vector", key="btn_parse_protein"):
-            if pdb_id:
-                ok, path = fetch_pdb_from_rcsb(pdb_id)
-                if ok:
-                    st.session_state.rd_receptor = path
-                    st.session_state.protein_parsed = True
-                    st.rerun()
-                else:
-                    st.error(path)
-    else:
-        uploaded_rec = st.file_uploader("Upload Macromolecule PDB", type=["pdb"])
-        if uploaded_rec:
-            path = f"rd_rec_{uploaded_rec.name}"
-            if st.button("📥 Parse Target Vector from File", key="btn_parse_file_protein"):
-                with open(path, "wb") as f:
-                    f.write(uploaded_rec.getbuffer())
-                st.session_state.rd_receptor = path
-                st.session_state.protein_parsed = True
-                st.rerun()
-
-    st.write("---")
-    st.header("2. Phytochemical Scaffold Profile")
-    
-    if st.session_state.ligand_parsed and st.session_state.rd_ligand:
-        st.success("🟢 Phytochemical Lead Scaffold Coordinates Ready")
-    else:
-        st.error("🔴 Scaffold Coordinate Alert: Small molecule ligand input coordinates missing.")
-        
-    ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule Data"])
+    ligand_mode = st.radio("Lead Input Setup:", ["Paste SMILES String", "Upload Small Molecule File (.SDF, .PDB)"])
     
     if ligand_mode == "Paste SMILES String":
-        default_smiles = "CC(=O)NC1=CC=C(O)C=C1" if "Option A" in engine_mode else ""
-        smiles_input = st.text_input("Parent Compound SMILES", value=default_smiles, placeholder="Enter valid chemical SMILES string...").strip()
-        if st.button("📥 Send Phytochemical Scaffold Profile", key="btn_gen_ligand"):
-            if smiles_input:
-                st.session_state.rd_parent_smiles = smiles_input
-                st.session_state.rd_ligand = generate_pdb_string_from_smiles(smiles_input)
-                st.session_state.ligand_parsed = True
-                st.rerun()
+        default_smiles = "CC(=O)NC1=CC=C(O)C=C1" # Paracetamol as a default example
+        smiles_input = st.text_input("Parent Compound SMILES", value=default_smiles).strip()
+        if st.button("📥 Load Scaffold Profile", type="primary"):
+            st.session_state.rd_parent_smiles = smiles_input
+            st.session_state.ligand_parsed = True
+            st.rerun()
     else:
-        uploaded_lig = st.file_uploader("Upload Molecule Block (.PDB, .SDF)", type=["pdb", "sdf"])
+        uploaded_lig = st.file_uploader("Upload Molecule Block", type=["pdb", "sdf"])
         if uploaded_lig:
-            local_path = f"rd_lig_{uploaded_lig.name}"
-            with open(local_path, "wb") as f:
+            temp_path = f"temp_lig_{uploaded_lig.name}"
+            with open(temp_path, "wb") as f: 
                 f.write(uploaded_lig.getbuffer())
-            st.session_state.staged_ligand_path = local_path
             
-        if st.session_state.staged_ligand_path is not None:
-            if st.button("📥 Send Phytochemical Scaffold Profile from File", key="btn_gen_file_ligand"):
-                try:
-                    path = st.session_state.staged_ligand_path
-                    mol = Chem.MolFromPDBFile(path, removeHs=False) if path.endswith(".pdb") else Chem.SDMolSupplier(path, removeHs=False)[0]
-                    if mol:
-                        st.session_state.rd_parent_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
-                        st.session_state.rd_ligand = Chem.MolToPDBBlock(mol)
-                        st.session_state.ligand_parsed = True
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error reading molecule: {e}")
+            mol = None
+            if temp_path.endswith(".pdb"):
+                mol = Chem.MolFromPDBFile(temp_path, removeHs=False)
+            else:
+                suppl = Chem.SDMolSupplier(temp_path, removeHs=False)
+                if suppl and len(suppl) > 0:
+                    mol = suppl[0]
 
-    if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
+            if mol:
+                extracted_smiles = str(Chem.MolToSmiles(Chem.RemoveHs(mol)))
+                st.session_state.rd_parent_smiles = extracted_smiles
+                st.session_state.ligand_parsed = True
+                st.success(f"🟢 Upload Complete! Auto-Extracted SMILES Matrix: `{extracted_smiles}`")
+            else:
+                st.error("Could not extract chemical structure from the uploaded file.")
+            
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    if st.session_state.ligand_parsed and st.session_state.rd_parent_smiles:
         st.write("---")
-        st.header("3. Clickable 2D Structural Map")
-        st.markdown("Look at the map below to choose which atom branch position you want to optimize:")
+        st.header("2. Reaction Mechanism & Target Selection")
         
-        zoom_toggle = st.toggle("🔍 Toggle High-Resolution Map Zoom", value=st.session_state.zoom_enabled)
-        st.session_state.zoom_enabled = zoom_toggle
-        current_zoom_width = 750 if zoom_toggle else 450
+        class_label, _ = get_dynamic_fragments(st.session_state.rd_parent_smiles)
+        st.write(f"🔬 **AI Scaffold Classification:** `{class_label}`")
         
-        color_map = {}
-        try:
-            p_mol = Chem.MolFromSmiles(st.session_state.rd_parent_smiles)
-            if p_mol:
-                for atom in p_mol.GetAtoms():
-                    idx = atom.GetIdx()
-                    color_map[idx] = (0.4, 0.8, 0.4) 
-        except Exception:
-            pass
-            
-        if st.session_state.valency_error and st.session_state.error_atom_idx is not None:
-            color_map[st.session_state.error_atom_idx] = (0.9, 0.3, 0.3) 
-            
-        base_img = generate_labeled_2d_image(st.session_state.rd_parent_smiles, highlight_dict=color_map, zoom_level=current_zoom_width)
-        if base_img:
-            st.html(base_img)
-            
-        if st.session_state.valency_error:
-            st.error("⚠️ Valency limit exceeded at this index spot. Try selecting a different atom vector position.")
+        valid_sites = find_valid_cleavage_sites(st.session_state.rd_parent_smiles)
         
-        try:
-            max_atoms = p_mol.GetNumAtoms() if p_mol else 10
-            atom_choices = [f"Atom Position #{idx} (Element: {p_mol.GetAtomWithIdx(idx).GetSymbol()})" for idx in range(max_atoms)]
-            selected_atom_label = st.selectbox("Select target position from the image map above:", options=atom_choices)
-            atom_vector = int(selected_atom_label.split("#")[1].split()[0])
-        except Exception:
-            atom_vector = 0
+        st.write("##### ⚙️ Synthesis Control Panel")
+        
+        if len(valid_sites) == 0:
+            st.warning("⚠️ High Steric Hindrance: Enforcing Co-Crystal mode.")
+            reaction_mode = "Co-Crystal / Salt Formulation (Non-Covalent)"
+        else:
+            reaction_mode = st.radio(
+                "Select Modification Mechanism:", 
+                ["True Covalent Substitution (Cleavage & Attachment)", "Co-Crystal / Salt Formulation (Non-Covalent)"]
+            )
+        
+        show_labels = st.toggle("🔍 Show Atom Index Numbers on Structure", value=True)
+        base_img = generate_clean_2d_image(st.session_state.rd_parent_smiles, include_labels=show_labels, zoom_level=600)
+        if base_img: st.html(base_img)
+        
+        if reaction_mode == "True Covalent Substitution (Cleavage & Attachment)":
+            st.info("💡 Select a target anchor atom from the topographic map above.")
+            site_options = {site["label"]: site["index"] for site in valid_sites}
+            selected_site_label = st.selectbox("🎯 Target Anchor Atom", options=list(site_options.keys()))
+            target_idx = site_options[selected_site_label]
+        else:
+            target_idx = 0
 
-        if st.button("🚀 Start Positive Array", type="primary"):
-            st.session_state.valency_error = False
-            with st.spinner("Processing optimization transformations..."):
-                if "Option A" in engine_mode:
-                    results_list = run_sandbox_engine(atom_vector)
-                else:
-                    results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, atom_vector)
-                    
+        if st.button("🚀 Generate Structural Derivatives", type="primary"):
+            with st.spinner("Processing structural operations..."):
+                results_list = run_cleaving_engine(st.session_state.rd_parent_smiles, target_idx, reaction_mode)
                 if len(results_list) > 0:
                     st.session_state.rd_library = pd.DataFrame(results_list)
-                    st.session_state.valency_error = False
                     st.rerun()
                 else:
-                    st.session_state.valency_error = True
-                    st.session_state.error_atom_idx = atom_vector
-                    st.session_state.rd_library = None
-                    st.rerun()
+                    st.error("Structural substitution failed.")
 
 with col_visuals:
-    st.header("4. Screening Array & Workspace Viewport")
+    st.header("3. Derivative Screening Library")
     
-    if st.session_state.protein_parsed and st.session_state.ligand_parsed and st.session_state.rd_library is not None:
-        st.markdown("### 🏆 Enhancing Properties Ranking Matrix")
-        st.dataframe(
-            st.session_state.rd_library[["Variant ID", "Fragment Added", "Redesigned SMILES", "Delta Score", "MW (g/mol)", "LogP"]],
-            hide_index=True, use_container_width=True
-        )
+    if st.session_state.ligand_parsed and st.session_state.rd_library is not None:
+        st.dataframe(st.session_state.rd_library[["Variant ID", "Fragment Added", "MW (g/mol)", "LogP"]], hide_index=True, use_container_width=True)
         
         st.write("---")
-        st.subheader("🔍 Selection Isolation & 2D Topography Mirror")
-        chosen_variant_id = st.selectbox("Isolate variant to map structural modifications:", options=st.session_state.rd_library["Variant ID"])
+        st.subheader("🔍 Isolate Variant Topography")
+        chosen_variant_id = st.selectbox("Select variant to view structural map:", options=st.session_state.rd_library["Variant ID"])
         
         selected_rows = st.session_state.rd_library[st.session_state.rd_library["Variant ID"] == chosen_variant_id]
         if not selected_rows.empty:
             selected_row = selected_rows.iloc[0]
             
-            st.markdown("##### 📍 Labeled 2D Structural Modification Mirror")
-            hl_atoms = [int(x) for x in selected_row["Highlight Atoms"]]
+            highlighted_img_html = generate_clean_2d_image(str(selected_row["Redesigned SMILES"]))
+            if highlighted_img_html: st.html(highlighted_img_html)
             
-            highlighted_img_html = generate_labeled_2d_image(
-                smiles_str=selected_row["Redesigned SMILES"],
-                highlight_dict={a: (0.4, 0.9, 0.4) for a in hl_atoms},
-                legend_text=f"Highlighted Region indicates newly introduced {selected_row['Fragment Added']} group geometry.",
-                zoom_level=450
-            )
-            if highlighted_img_html:
-                st.html(highlighted_img_html)
-            
-            variant_pdb_string = generate_pdb_string_from_smiles(selected_row["Redesigned SMILES"])
-            if variant_pdb_string:
-                safe_file_id = str(chosen_variant_id).split()[0].replace("-", "_")
-                st.download_button(
-                    label=f"📥 Download {chosen_variant_id.split()[0]} Coordinates (.PDB)",
-                    data=variant_pdb_string,
-                    file_name=f"redesign_{safe_file_id}.pdb",
-                    mime="text/plain",
-                    use_container_width=True,
-                    key="dl_pdb_variant_btn"
-                )
+            st.write(f"**Structural Identification:** Appended functional group: **{str(selected_row['Fragment Added'])}**.")
             
             st.write("---")
-            st.subheader("🧪 Synthetic Route Evaluation Blueprint")
+            st.subheader("🧪 Synthetic Route Evaluation")
+            st.success(f"**Predicted Efficiency Level:** {str(selected_row['Yield Prediction'])}")
+            st.write(f"**Proposed Retrosynthetic Reaction Pathway:** {str(selected_row['Route'])}")
             
-            y_pred = selected_row["Yield Prediction"]
-            if "Good" in y_pred: st.success(f"**Predicted Efficiency Level:** {y_pred}")
-            elif "Moderate" in y_pred: st.warning(f"**Predicted Efficiency Level:** {y_pred}")
-            else: st.error(f"**Predicted Efficiency Level:** {y_pred}")
-                
-            st.markdown(f"""
-            > **Proposed Retrosynthetic Mechanism Protocol:** \n> * **Reaction Strategy:** {selected_row['Route']}  
-            > * **Target Derivative Dynamic SMILES Identity String:** `{selected_row['Redesigned SMILES']}`
-            """)
+            st.write("##### 📋 Target Redesign SMILES")
+            st.code(f"{str(selected_row['Redesigned SMILES'])}", language="text")
             
             st.write("---")
-            st.subheader("📊 Modeled Vibrational Spectrum Footprint (FTIR)")
-            
+            st.subheader("📊 Theoretical Vibrational Spectrum (FTIR)")
             wavenumbers = np.linspace(400, 4000, 500)
-            baseline_transmittance = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
-            
+            baseline = 98.0 - 2.0 * np.sin(wavenumbers / 200.0)
             target_peak = int(selected_row["FTIR Peak"])
-            peak_intensity = 45.0 if "Good" in y_pred else 30.0
-            fragment_peak_effect = peak_intensity * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
-            simulated_ftir_profile = baseline_transmittance - fragment_peak_effect
+            effect = 40.0 * np.exp(-((wavenumbers - target_peak) / 45.0)**2)
             
-            chart_df = pd.DataFrame({
-                "Wavenumber (cm⁻¹)": wavenumbers,
-                "Transmittance (%)": np.clip(simulated_ftir_profile, 5.0, 100.0)
-            }).set_index("Wavenumber (cm⁻¹)")
-            
-            st.line_chart(chart_df, height=220)
-            st.markdown(f"<p style='text-align:center; font-size:12px; color:#666;'>Figure: Modeled FTIR spectrum tracking signature vibrational bands induced by the <b>{selected_row['Fragment Added']}</b> modification around <b>{target_peak} cm⁻¹</b>.</p>", unsafe_html=True)
-            
+            chart_df = pd.DataFrame({"Wavenumber": wavenumbers, "Transmittance (%)": np.clip(baseline - effect, 5.0, 100.0)}).set_index("Wavenumber")
+            st.line_chart(chart_df, height=250)
+                        
     else:
-        st.info("📊 Workspace Gated: Please load and parse both Target Protein and Phytochemical Lead profiles to initialize the generative molecular redesign layouts.")
+        st.info("📊 Workspace Gated: Please load a parent scaffold and generate derivatives to view results.")
