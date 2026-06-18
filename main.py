@@ -336,6 +336,54 @@ def calculate_advanced_adme(smiles):
         "BBB": bbb, "HIA": hia
     }
 
+# --- 3D LIGAND EXPORT MODULE ---
+def generate_3d_sdf(smiles):
+    """Generates an energy-minimized 3D SDF block natively using RDKit."""
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if not mol: return None
+        mol = Chem.AddHs(mol)
+        # Embed 3D coordinates
+        if AllChem.EmbedMolecule(mol, randomSeed=42) >= 0:
+            # Optimize geometry using MMFF94 force field
+            AllChem.MMFFOptimizeMolecule(mol)
+            return Chem.MolToMolBlock(mol)
+    except Exception:
+        return None
+    return None
+
+def generate_pdbqt_meeko(smiles):
+    """Generates a PDBQT string using pure Python via Meeko (Ideal for PyRx/AutoDock)."""
+    try:
+        from meeko import MoleculePreparation
+        mol = Chem.MolFromSmiles(smiles)
+        if not mol: return None
+        mol = Chem.AddHs(mol)
+        if AllChem.EmbedMolecule(mol, randomSeed=42) >= 0:
+            AllChem.MMFFOptimizeMolecule(mol)
+            preparator = MoleculePreparation()
+            preparator.prepare(mol)
+            return preparator.write_pdbqt_string()
+    except ImportError:
+        return "ERROR: Meeko not installed. Run 'pip install meeko'"
+    except Exception:
+        return None
+    return None
+
+def generate_mol2_openbabel(smiles):
+    """Generates a MOL2 string using OpenBabel."""
+    try:
+        from openbabel import pybel
+        mol = pybel.readstring("smi", smiles)
+        mol.make3D()
+        mol.localopt(forcefield="mmff94", steps=500)
+        return mol.write("mol2")
+    except ImportError:
+        return "ERROR: OpenBabel not installed. Run 'pip install openbabel'"
+    except Exception:
+        return None
+    return None
+
 # --- REPORT EXPORT MODULE ---
 def generate_html_report(engine_mode, protein_id, protein_meta, parent_smiles, reaction_mode, library_df, selected_row, iupac_name, comp_df, shift_summary, parent_img, variant_img, ftir_img):
     html_template = f"""
@@ -774,6 +822,54 @@ with col_visuals:
                         mime="text/html",
                         use_container_width=True
                     )
+
+                    # --- 3D LIGAND EXPORT UI ---
+                    st.write("---")
+                    st.subheader("💾 3D Ligand Export (Molecular Docking)")
+                    st.write("Download energy-minimized 3D conformers ready for high-throughput screening in PyRx, AutoDock Vina, or SwissDock.")
+                    
+                    col_export1, col_export2, col_export3 = st.columns(3)
+                    
+                    # Generate the 3D files in the background
+                    sdf_data = generate_3d_sdf(current_smiles)
+                    pdbqt_data = generate_pdbqt_meeko(current_smiles)
+                    mol2_data = generate_mol2_openbabel(current_smiles)
+                    
+                    with col_export1:
+                        if sdf_data:
+                            st.download_button(
+                                label="⬇️ Download .SDF", 
+                                data=sdf_data, 
+                                file_name=f"{selected_row['Variant ID']}_3D.sdf", 
+                                mime="chemical/x-mdl-sdfile", 
+                                use_container_width=True
+                            )
+                        else:
+                            st.error("SDF Generation Failed")
+                            
+                    with col_export2:
+                        if pdbqt_data and not pdbqt_data.startswith("ERROR"):
+                            st.download_button(
+                                label="⬇️ Download .PDBQT", 
+                                data=pdbqt_data, 
+                                file_name=f"{selected_row['Variant ID']}_Docking.pdbqt", 
+                                mime="text/plain", 
+                                use_container_width=True
+                            )
+                        elif pdbqt_data and pdbqt_data.startswith("ERROR"):
+                            st.warning("Meeko library missing")
+                            
+                    with col_export3:
+                        if mol2_data and not mol2_data.startswith("ERROR"):
+                            st.download_button(
+                                label="⬇️ Download .MOL2", 
+                                data=mol2_data, 
+                                file_name=f"{selected_row['Variant ID']}_Docking.mol2", 
+                                mime="chemical/x-mol2", 
+                                use_container_width=True
+                            )
+                        elif mol2_data and mol2_data.startswith("ERROR"):
+                            st.warning("OpenBabel library missing")
 
             # =====================================================================
             # --- HIDDEN DOCKING SECTION ---
